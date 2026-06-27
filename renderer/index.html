@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src https:; style-src 'self' 'unsafe-inline'; img-src 'self' data:;" />
+    <title>ForgeNotes Recorder</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="app-header">
+      <div class="brand">
+        <span class="brand-dot"></span>
+        <span>ForgeNotes <strong>Recorder</strong></span>
+      </div>
+      <div id="rec-indicator" class="rec-indicator hidden">
+        <span class="rec-dot"></span>
+        <span id="rec-timer">00:00</span>
+      </div>
+    </header>
+
+    <main class="app-body">
+      <!-- Config missing -->
+      <section id="config-error" class="card error-card hidden">
+        <h2>Setup needed</h2>
+        <p>Copy <code>config.example.json</code> to <code>config.json</code> and fill in the Supabase
+          anon key, then restart the app.</p>
+      </section>
+
+      <!-- Login -->
+      <section id="login-view" class="card hidden">
+        <h2>Sign in</h2>
+        <p class="muted">Use your ForgeNotes (TheContentForge) account.</p>
+        <label class="field">
+          <span>Email</span>
+          <input id="login-email" type="email" autocomplete="username" placeholder="you@thecontentforge.io" />
+        </label>
+        <label class="field">
+          <span>Password</span>
+          <input id="login-password" type="password" autocomplete="current-password" />
+        </label>
+        <p id="login-error" class="msg error hidden"></p>
+        <button id="login-btn" class="btn primary">Sign in</button>
+      </section>
+
+      <!-- Recorder -->
+      <section id="recorder-view" class="hidden">
+        <div class="account-row">
+          <span class="muted" id="account-email"></span>
+          <button id="signout-btn" class="btn link">Sign out</button>
+        </div>
+
+        <div class="card">
+          <label class="field">
+            <span>Meeting title</span>
+            <input id="title" type="text" placeholder="Untitled meeting" />
+          </label>
+
+          <div class="grid2">
+            <label class="field">
+              <span>Source</span>
+              <select id="source">
+                <option value="zoom">Zoom</option>
+                <option value="google_meet">Google Meet</option>
+                <option value="telegram">Telegram</option>
+                <option value="discord">Discord</option>
+                <option value="x_spaces">X Spaces</option>
+                <option value="phone">Phone</option>
+                <option value="in_person">In person</option>
+                <option value="other" selected>Other</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Visibility</span>
+              <select id="visibility">
+                <option value="private" selected>Private</option>
+                <option value="tcf_internal">TCF internal</option>
+                <option value="project">Project</option>
+                <option value="shared_users">Shared users</option>
+              </select>
+            </label>
+          </div>
+
+          <label class="field">
+            <span>Microphone</span>
+            <select id="mic"></select>
+          </label>
+
+          <label class="field">
+            <span>System audio source</span>
+            <select id="system-source"></select>
+          </label>
+          <p class="hint">Pick <strong>BlackHole 2ch</strong> (auto-selected if found). Route the
+            meeting into BlackHole via a Multi-Output Device so it's captured — see the README. The
+            “Call audio” meter below confirms it's working.</p>
+
+          <p class="consent">🔴 Recording captures your mic and (if enabled) everyone on the call.
+            Make sure participants consent before you start.</p>
+
+          <div class="controls">
+            <button id="start-btn" class="btn primary big">Start recording</button>
+            <button id="pause-btn" class="btn ghost hidden">Pause</button>
+            <button id="stop-btn" class="btn danger hidden">Stop &amp; upload</button>
+          </div>
+
+          <div id="meters" class="meters hidden">
+            <div class="meter-row">
+              <span class="cap" id="cap-mic">You (mic)</span>
+              <div class="meter"><div id="meter-mic" class="meter-fill"></div></div>
+            </div>
+            <div class="meter-row">
+              <span class="cap" id="cap-system">Call audio</span>
+              <div class="meter"><div id="meter-system" class="meter-fill"></div></div>
+            </div>
+          </div>
+
+          <p id="status" class="msg hidden"></p>
+          <a id="open-link" class="btn link hidden" href="#">Open in ForgeNotes →</a>
+        </div>
+      </section>
+
+      <!-- Pending uploads / offline queue -->
+      <section id="pending-view" class="card hidden">
+        <h3>Pending uploads</h3>
+        <p class="muted small">Recordings saved on this device that haven't reached ForgeNotes yet.</p>
+        <ul id="pending-list" class="pending-list"></ul>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>

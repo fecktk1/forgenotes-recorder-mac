@@ -1,0 +1,29 @@
+{
+  "name": "forgenotes-recorder-mac",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ForgeNotes desktop recorder (macOS) — captures mic + BlackHole system audio as separate tracks and uploads them to the ForgeNotes pipeline.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist:mac": "electron-builder --mac"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "io.thecontentforge.forgenotes.recorder.mac",
+    "productName": "ForgeNotes Recorder",
+    "files": ["main.js", "preload.js", "renderer/**", "config.json", "config.example.json"],
+    "directories": { "output": "release" },
+    "mac": {
+      "target": "dmg",
+      "identity": null,
+      "category": "public.app-category.productivity",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "ForgeNotes records your microphone and the meeting audio you route through BlackHole."
+      }
+    }
+  }
+}
