@@ -15,12 +15,13 @@
   "build": {
     "appId": "io.thecontentforge.forgenotes.recorder.mac",
     "productName": "ForgeNotes Recorder",
-    "files": ["main.js", "preload.js", "renderer/**", "config.json", "config.example.json"],
+    "files": ["main.js", "preload.js", "renderer/**", "icon.png", "config.json", "config.example.json"],
     "directories": { "output": "release" },
     "mac": {
       "target": "dmg",
       "identity": null,
       "category": "public.app-category.productivity",
+      "icon": "icon.png",
       "extendInfo": {
         "NSMicrophoneUsageDescription": "ForgeNotes records your microphone and the meeting audio you route through BlackHole."
       }

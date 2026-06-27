@@ -70,21 +70,30 @@ removes the local copy.
 ```sh
 npm run dist:mac
 ```
-This is **ad-hoc signed** (`identity: null`) — no Apple Developer ID, no notarization. On first
-launch macOS will warn about an unidentified developer; **right-click the app → Open** once to
-approve it. Acceptable for internal/single-user use. `NSMicrophoneUsageDescription` is set so the
-mic-permission prompt has a reason string.
+Produces `release/ForgeNotes Recorder-<version>-arm64.dmg`, branded with the ForgeNotes icon. It's
+**ad-hoc signed** (`identity: null`) — no Apple Developer ID, no notarization. On first launch macOS
+warns about an unidentified developer; **right-click the app → Open** once to approve it. Acceptable
+for internal/single-user use. `NSMicrophoneUsageDescription` is set so the mic-permission prompt has
+a reason string. (If the build fails downloading Electron on Node 26, see Troubleshooting and build
+with Node 20/22 LTS.)
 
 ## Troubleshooting
 
-**`Error: Electron failed to install correctly` on `npm start`** — newer npm (bundled with
-Node 24+/26) blocks package install scripts by default, so Electron's `postinstall` (which
-downloads its binary) never ran. Run that step manually, then start again:
+**`Error: Electron failed to install correctly` on `npm start`** — on **Node 24+/26**, npm blocks
+package install scripts AND Electron's binary downloader (`@electron/get`) fails silently, so the
+binary never lands. The reliable fix is to drop the matching Electron build in directly (Apple
+Silicon shown — use `darwin-x64` on an Intel Mac):
 ```sh
-node node_modules/electron/install.js
+V=$(node -p "require('./node_modules/electron/package.json').version")
+curl -L -o /tmp/electron.zip "https://github.com/electron/electron/releases/download/v$V/electron-v$V-darwin-arm64.zip"
+rm -rf node_modules/electron/dist && mkdir -p node_modules/electron/dist
+unzip -q /tmp/electron.zip -d node_modules/electron/dist
+printf 'Electron.app/Contents/MacOS/Electron' > node_modules/electron/path.txt
+xattr -dr com.apple.quarantine node_modules/electron/dist 2>/dev/null
 npm start
 ```
-(Equivalent: `npm approve-scripts electron && npm rebuild electron`.)
+The same `@electron/get` issue can break `npm run dist:mac`; if so, build with **Node 20/22 LTS**
+(e.g. via `nvm`) — the app itself runs fine on Node 26 once the binary is in place.
 
 ## Notes / limitations (v1)
 
