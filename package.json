@@ -17,6 +17,7 @@
     "productName": "ForgeNotes Recorder",
     "files": ["main.js", "preload.js", "renderer/**", "icon.png", "config.json", "config.example.json"],
     "directories": { "output": "release" },
+    "artifactName": "ForgeNotes-Recorder.${ext}",
     "mac": {
       "target": "dmg",
       "identity": null,
