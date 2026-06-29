@@ -13,7 +13,7 @@ contextBridge.exposeInMainWorld('desktop', {
   openExternal: (url) => ipcRenderer.invoke('open:external', url),
 
   // Local recording fallback / offline queue. Blobs cross IPC as ArrayBuffers.
-  saveRecording: (localId, meta, tracks) => ipcRenderer.invoke('rec:save', { localId, meta, tracks }),
+  saveRecording: (localId, meta, segments) => ipcRenderer.invoke('rec:save', { localId, meta, segments }),
   listPending: () => ipcRenderer.invoke('rec:list'),
   readRecording: (localId) => ipcRenderer.invoke('rec:read', localId),
   deleteRecording: (localId) => ipcRenderer.invoke('rec:delete', localId),

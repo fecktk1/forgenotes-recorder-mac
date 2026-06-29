@@ -1,12 +1,16 @@
-// ForgeNotes Recorder — renderer. Captures mic + system audio as separate tracks,
-// then drives the SAME create-session -> upload-file -> finalize-session flow the
-// web app uses. Recordings are always saved locally first, so a failed upload is
-// retryable and never lost.
+// ForgeNotes Recorder (macOS) — renderer. Captures mic + the BlackHole system input
+// as separate tracks, then drives the SAME create-session -> upload-file ->
+// finalize-session flow the web app uses. To support long meetings, each track is
+// recorded as a series of ~5-minute SEGMENTS (seq 0,1,2,…) — the transcription worker
+// concatenates them — so no single uploaded file ever hits the storage/edge size
+// ceiling. Recordings are always saved locally first, so a failed upload is retryable.
 'use strict'
 
 const $ = (id) => document.getElementById(id)
 const show = (id) => $(id).classList.remove('hidden')
 const hide = (id) => $(id).classList.add('hidden')
+
+const ROTATE_MS = 5 * 60 * 1000 // segment length — keeps each uploaded file small
 
 let CFG = null
 let auth = null // { access_token, refresh_token, expires_at(ms), email }
@@ -217,6 +221,52 @@ function setupMeters(micStream, systemStream) {
   }
 }
 
+// ---------------------------------------------------------------- segmented recording
+// One MediaRecorder per track per segment. On stop (rotation or final), its onstop
+// pushes the completed, independently-decodable webm blob to rec.segments.
+function startTrackSegment(track, stream) {
+  if (!stream) return null
+  const chunks = []
+  const recorder = new MediaRecorder(stream, rec.mime ? { mimeType: rec.mime } : undefined)
+  recorder.ondataavailable = (e) => {
+    if (e.data && e.data.size) chunks.push(e.data)
+  }
+  recorder.onstop = () => {
+    const blob = new Blob(chunks, { type: rec ? rec.mime : 'audio/webm' })
+    if (blob.size && rec) rec.segments.push({ track, blob })
+  }
+  recorder.start(1000)
+  return { recorder, chunks }
+}
+
+// Rotate every ROTATE_MS: stop the current segment recorders (their onstop banks the
+// segment) and immediately start fresh ones. The ~ms gap is negligible for transcription.
+function rotate() {
+  if (!rec || rec.paused || rec.stopping) return
+  const cycle = (key, track, stream) => {
+    const seg = rec[key]
+    if (seg && seg.recorder && seg.recorder.state !== 'inactive') seg.recorder.stop()
+    rec[key] = startTrackSegment(track, stream)
+  }
+  cycle('mic', 'mic', rec.micStream)
+  cycle('system', 'system', rec.systemStream)
+}
+
+// Stop one track's current segment and wait for its blob to be banked.
+function flushSegment(key, track) {
+  return new Promise((resolve) => {
+    const seg = rec && rec[key]
+    if (!seg || !seg.recorder) return resolve()
+    seg.recorder.onstop = () => {
+      const blob = new Blob(seg.chunks, { type: rec ? rec.mime || 'audio/webm' : 'audio/webm' })
+      if (blob.size && rec) rec.segments.push({ track, blob })
+      resolve()
+    }
+    if (seg.recorder.state !== 'inactive') seg.recorder.stop()
+    else resolve()
+  })
+}
+
 async function startRecording() {
   setStatus('', null)
   hide('open-link')
@@ -262,27 +312,9 @@ async function startRecording() {
   }
 
   const mime = pickMime()
-  const mkRecorder = (stream, bucket) => {
-    const r = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined)
-    r.ondataavailable = (e) => {
-      if (e.data && e.data.size) bucket.push(e.data)
-    }
-    r.start(1000)
-    return r
-  }
-
-  const micChunks = []
-  const systemChunks = []
-  const micRecorder = mkRecorder(micStream, micChunks)
-  const systemRecorder = systemStream ? mkRecorder(systemStream, systemChunks) : null
-
   rec = {
-    micRecorder,
-    systemRecorder,
     micStream,
     systemStream,
-    micChunks,
-    systemChunks,
     mime: mime || 'audio/webm',
     startedAt: Date.now(),
     pausedMs: 0,
@@ -293,8 +325,17 @@ async function startRecording() {
       source_type: $('source').value,
       visibility: $('visibility').value,
     },
+    mic: null,
+    system: null,
+    segments: [],
+    rotateTimer: null,
     timer: null,
+    meters: null,
+    stopping: false,
   }
+  rec.mic = startTrackSegment('mic', micStream)
+  rec.system = startTrackSegment('system', systemStream)
+  rec.rotateTimer = setInterval(rotate, ROTATE_MS)
 
   if (warning) setStatus(warning, 'warn')
 
@@ -317,16 +358,15 @@ async function startRecording() {
 
 function togglePause() {
   if (!rec) return
+  const recorders = [rec.mic, rec.system].filter(Boolean).map((s) => s.recorder)
   if (!rec.paused) {
-    rec.micRecorder.pause()
-    if (rec.systemRecorder) rec.systemRecorder.pause()
+    recorders.forEach((r) => { if (r.state === 'recording') r.pause() })
     rec.paused = true
     rec.pauseStart = Date.now()
     $('pause-btn').textContent = 'Resume'
     $('rec-indicator').classList.add('hidden')
   } else {
-    rec.micRecorder.resume()
-    if (rec.systemRecorder) rec.systemRecorder.resume()
+    recorders.forEach((r) => { if (r.state === 'paused') r.resume() })
     rec.pausedMs += Date.now() - rec.pauseStart
     rec.paused = false
     $('pause-btn').textContent = 'Pause'
@@ -347,70 +387,62 @@ function updateTimer() {
   $('rec-timer').textContent = `${mm}:${ss}`
 }
 
-function stopRecorder(recorder, chunks, mime) {
-  return new Promise((resolve) => {
-    if (!recorder) {
-      resolve(null)
-      return
-    }
-    recorder.onstop = () => resolve(new Blob(chunks, { type: mime }))
-    if (recorder.state !== 'inactive') recorder.stop()
-    else resolve(new Blob(chunks, { type: mime }))
-  })
-}
-
 async function stopRecording() {
-  if (!rec) return
-  const current = rec
-  rec = null
-  clearInterval(current.timer)
-  if (current.meters) current.meters.stop()
+  if (!rec || rec.stopping) return
+  rec.stopping = true
+  clearInterval(rec.rotateTimer)
+  clearInterval(rec.timer)
+  if (rec.meters) rec.meters.stop()
   hide('meters')
   hide('rec-indicator')
   $('pause-btn').classList.add('hidden')
   $('stop-btn').classList.add('hidden')
   $('pause-btn').textContent = 'Pause'
 
-  const durationSec = Math.max(1, Math.round((Date.now() - current.startedAt - current.pausedMs) / 1000))
-  const micBlob = await stopRecorder(current.micRecorder, current.micChunks, current.mime)
-  const systemBlob = await stopRecorder(current.systemRecorder, current.systemChunks, current.mime)
-  current.micStream.getTracks().forEach((t) => t.stop())
-  if (current.systemStream) current.systemStream.getTracks().forEach((t) => t.stop())
+  // Flush the in-progress segment on each track, then collect everything.
+  await flushSegment('mic', 'mic')
+  await flushSegment('system', 'system')
 
-  const trackBlobs = []
-  if (micBlob && micBlob.size) trackBlobs.push({ track: 'mic', blob: micBlob })
-  if (systemBlob && systemBlob.size) trackBlobs.push({ track: 'system', blob: systemBlob })
+  rec.micStream.getTracks().forEach((t) => t.stop())
+  if (rec.systemStream) rec.systemStream.getTracks().forEach((t) => t.stop())
 
-  if (!trackBlobs.length) {
+  const segments = rec.segments
+  const durationSec = Math.max(1, Math.round((Date.now() - rec.startedAt - rec.pausedMs) / 1000))
+  const baseMeta = { ...rec.meta, durationSec, createdAt: new Date().toISOString() }
+  const localId = `rec_${rec.startedAt}`
+  rec = null
+  resetControls()
+
+  if (!segments.length) {
     setStatus('Nothing was recorded.', 'error')
-    resetControls()
     return
   }
 
-  const localId = `rec_${current.startedAt}`
+  // Assign each track its own seq 0,1,2,… in chronological order.
+  const seqByTrack = {}
+  const seqd = segments.map((s) => {
+    seqByTrack[s.track] = seqByTrack[s.track] === undefined ? 0 : seqByTrack[s.track] + 1
+    return { track: s.track, seq: seqByTrack[s.track], blob: s.blob }
+  })
   const meta = {
-    ...current.meta,
-    durationSec,
-    createdAt: new Date().toISOString(),
-    tracks: trackBlobs.map((t) => t.track),
-    uploaded: false,
+    ...baseMeta,
+    segments: seqd.map((s) => ({ track: s.track, seq: s.seq })),
+    tracks: Array.from(new Set(seqd.map((s) => s.track))),
   }
 
   // Always persist locally BEFORE attempting upload (offline-safe).
   try {
-    const ipcTracks = await Promise.all(
-      trackBlobs.map(async (t) => ({ track: t.track, data: await t.blob.arrayBuffer() })),
+    const ipcSegs = await Promise.all(
+      seqd.map(async (s) => ({ track: s.track, seq: s.seq, data: await s.blob.arrayBuffer() })),
     )
-    await window.desktop.saveRecording(localId, meta, ipcTracks)
+    await window.desktop.saveRecording(localId, meta, ipcSegs)
     await refreshPending()
   } catch (e) {
     setStatus(`Could not save the recording locally: ${e.message}`, 'error')
-    resetControls()
     return
   }
 
-  resetControls()
-  await uploadFromBlobs(localId, meta, trackBlobs)
+  await uploadSegments(localId, meta, seqd)
 }
 
 function resetControls() {
@@ -419,8 +451,8 @@ function resetControls() {
 }
 
 // ---------------------------------------------------------------- upload
-async function uploadFromBlobs(localId, meta, trackBlobs) {
-  setStatus('Uploading to ForgeNotes…', 'busy')
+async function uploadSegments(localId, meta, seqd) {
+  setStatus(`Uploading ${seqd.length} segment${seqd.length === 1 ? '' : 's'} to ForgeNotes…`, 'busy')
   try {
     const created = await callFn('forgenotes-create-session', {
       body: {
@@ -433,13 +465,16 @@ async function uploadFromBlobs(localId, meta, trackBlobs) {
     const sessionId = created.session && created.session.id
     if (!sessionId) throw new Error('No session id returned')
 
-    for (const t of trackBlobs) {
+    let done = 0
+    for (const s of seqd) {
       const fd = new FormData()
       fd.append('session_id', sessionId)
-      fd.append('track', t.track)
-      fd.append('seq', '0')
-      fd.append('file', t.blob, `${t.track}.webm`)
+      fd.append('track', s.track)
+      fd.append('seq', String(s.seq))
+      fd.append('file', s.blob, `${s.track}-${s.seq}.webm`)
       await callFn('forgenotes-upload-file', { formData: fd })
+      done += 1
+      setStatus(`Uploading… ${done}/${seqd.length}`, 'busy')
     }
 
     await callFn('forgenotes-finalize-session', {
@@ -488,7 +523,8 @@ async function refreshPending() {
     sub.className = 's'
     const when = formatWhen(item.meta.createdAt)
     const tracks = (item.meta.tracks || []).join(' + ')
-    sub.textContent = `${when} · ${tracks} · ${item.meta.durationSec || 0}s`
+    const segCount = (item.meta.segments || []).length
+    sub.textContent = `${when} · ${tracks} · ${item.meta.durationSec || 0}s${segCount ? ` · ${segCount} parts` : ''}`
     meta.appendChild(title)
     meta.appendChild(sub)
 
@@ -519,13 +555,14 @@ async function retryPending(localId, btn) {
   btn.disabled = true
   btn.textContent = 'Uploading…'
   try {
-    const { meta, tracks } = await window.desktop.readRecording(localId)
-    const trackBlobs = tracks.map((t) => ({
-      track: t.track,
-      blob: new Blob([t.data], { type: 'audio/webm' }),
+    const { meta, segments } = await window.desktop.readRecording(localId)
+    const seqd = (segments || []).map((s) => ({
+      track: s.track,
+      seq: s.seq,
+      blob: new Blob([s.data], { type: 'audio/webm' }),
     }))
-    if (!trackBlobs.length) throw new Error('No audio on disk')
-    await uploadFromBlobs(localId, meta, trackBlobs)
+    if (!seqd.length) throw new Error('No audio on disk')
+    await uploadSegments(localId, meta, seqd)
   } catch (e) {
     setStatus(`Retry failed: ${e.message}`, 'error')
     btn.disabled = false

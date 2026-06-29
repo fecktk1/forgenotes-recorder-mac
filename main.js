@@ -120,15 +120,16 @@ function safeId(id) {
   return String(id || '').replace(/[^a-zA-Z0-9_-]/g, '')
 }
 
-ipcMain.handle('rec:save', async (_e, { localId, meta, tracks }) => {
+ipcMain.handle('rec:save', async (_e, { localId, meta, segments }) => {
   const id = safeId(localId)
   if (!id) throw new Error('invalid_local_id')
   const dir = path.join(REC_DIR(), id)
   await fs.mkdir(dir, { recursive: true })
   await fs.writeFile(path.join(dir, 'meta.json'), JSON.stringify(meta ?? {}, null, 2), 'utf8')
-  for (const t of tracks || []) {
-    if (!t || !t.track || !t.data) continue
-    await fs.writeFile(path.join(dir, `${safeId(t.track)}.webm`), Buffer.from(t.data))
+  for (const s of segments || []) {
+    if (!s || !s.track || s.data == null) continue
+    const name = `${safeId(s.track)}-${String(s.seq ?? 0).padStart(4, '0')}.webm`
+    await fs.writeFile(path.join(dir, name), Buffer.from(s.data))
   }
   return true
 })
@@ -158,16 +159,17 @@ ipcMain.handle('rec:read', async (_e, localId) => {
   const id = safeId(localId)
   const dir = path.join(REC_DIR(), id)
   const meta = JSON.parse(await fs.readFile(path.join(dir, 'meta.json'), 'utf8'))
-  const tracks = []
-  for (const track of meta.tracks || []) {
+  const segments = []
+  for (const seg of meta.segments || []) {
     try {
-      const buf = await fs.readFile(path.join(dir, `${safeId(track)}.webm`))
-      tracks.push({ track, data: buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) })
+      const name = `${safeId(seg.track)}-${String(seg.seq ?? 0).padStart(4, '0')}.webm`
+      const buf = await fs.readFile(path.join(dir, name))
+      segments.push({ track: seg.track, seq: seg.seq ?? 0, data: buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) })
     } catch {
-      // missing track file
+      // missing segment file
     }
   }
-  return { meta, tracks }
+  return { meta, segments }
 })
 
 ipcMain.handle('rec:delete', async (_e, localId) => {
