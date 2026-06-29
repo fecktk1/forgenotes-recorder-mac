@@ -19,6 +19,8 @@ let rec = null // active recording state
 // ---------------------------------------------------------------- boot
 async function boot() {
   CFG = await window.desktop.getConfig()
+  const verEl = $('app-version')
+  if (verEl && CFG.version) verEl.textContent = `v${CFG.version}`
   if (CFG._parseError || !CFG.supabaseUrl || !CFG.supabaseAnonKey) {
     if (CFG._parseError) {
       const detail = document.querySelector('#config-error p')

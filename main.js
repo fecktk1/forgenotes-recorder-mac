@@ -75,6 +75,7 @@ ipcMain.handle('config:get', async () => {
     supabaseUrl: cfg.supabaseUrl || '',
     supabaseAnonKey: cfg.supabaseAnonKey || '',
     forgenotesHost: cfg.forgenotesHost || 'https://notes.thecontentforge.io',
+    version: app.getVersion(),
     _parseError: cfg._parseError || null,
   }
 })
