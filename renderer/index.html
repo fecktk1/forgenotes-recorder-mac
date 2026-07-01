@@ -56,6 +56,20 @@
             <input id="title" type="text" placeholder="Untitled meeting" />
           </label>
 
+          <label class="field">
+            <span>Template</span>
+            <!-- keys mirror supabase/functions/_shared/forgenotes-templates.ts (source of truth) -->
+            <select id="template">
+              <option value="general" selected>General</option>
+              <option value="one_on_one">1:1</option>
+              <option value="standup">Standup</option>
+              <option value="sales_call">Sales call</option>
+              <option value="investor_call">Investor call</option>
+              <option value="interview">Interview</option>
+              <option value="client_project">Client / project</option>
+            </select>
+          </label>
+
           <div class="grid2">
             <label class="field">
               <span>Source</span>

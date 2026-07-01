@@ -326,6 +326,7 @@ async function startRecording() {
       title: $('title').value.trim(),
       source_type: $('source').value,
       visibility: $('visibility').value,
+      template_key: $('template').value,
     },
     mic: null,
     system: null,
@@ -461,6 +462,7 @@ async function uploadSegments(localId, meta, seqd) {
         title: meta.title || 'Untitled meeting',
         source_type: meta.source_type || 'other',
         visibility: meta.visibility || 'private',
+        template_key: meta.template_key || 'general',
         tags: [],
       },
     })
