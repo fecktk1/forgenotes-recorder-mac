@@ -15,6 +15,7 @@ const ROTATE_MS = 5 * 60 * 1000 // segment length — keeps each uploaded file s
 let CFG = null
 let auth = null // { access_token, refresh_token, expires_at(ms), email }
 let rec = null // active recording state
+let preflightMeter = null // live mic meter used by the pre-record device check
 
 // ---------------------------------------------------------------- boot
 async function boot() {
@@ -87,6 +88,7 @@ async function getToken() {
 
 async function signOut() {
   auth = null
+  stopPreflightMeter()
   await window.desktop.secureClear()
   hide('recorder-view')
   show('login-view')
@@ -119,6 +121,112 @@ async function enterRecorder() {
   show('recorder-view')
   $('account-email').textContent = auth.email || 'Signed in'
   await populateMics()
+  runPreflight()
+}
+
+// ---------------------------------------------------------------- preflight
+// A pre-record device check: is the mic live (with a level meter to prove it), is the
+// call-audio source (BlackHole) present + selected, and is there enough disk for a long
+// meeting? Purely informational — Start still works; capture errors also surface on Start.
+function setPreflightRow(id, state, label, detail) {
+  const panel = $('preflight-results')
+  let row = document.getElementById(`pf-${id}`)
+  if (!row) {
+    row = document.createElement('li')
+    row.id = `pf-${id}`
+    row.innerHTML = '<span class="pf-ic"></span><span class="pf-body"><span class="pf-label"></span><span class="pf-detail"></span></span>'
+    panel.appendChild(row)
+  }
+  row.className = `pf-row ${state}`
+  row.querySelector('.pf-ic').textContent = { checking: '…', ok: '✓', warn: '!', fail: '✕', skip: '–' }[state] || '…'
+  row.querySelector('.pf-label').textContent = label
+  row.querySelector('.pf-detail').textContent = detail
+}
+
+function stopPreflightMeter() {
+  if (preflightMeter) { preflightMeter.stop(); preflightMeter = null }
+}
+
+function startPreflightMeter(stream) {
+  stopPreflightMeter()
+  let ctx
+  try { ctx = new AudioContext() } catch { return }
+  const src = ctx.createMediaStreamSource(stream)
+  const analyser = ctx.createAnalyser()
+  analyser.fftSize = 512
+  src.connect(analyser)
+  const data = new Uint8Array(analyser.fftSize)
+  let raf = 0
+  const tick = () => {
+    analyser.getByteTimeDomainData(data)
+    let sum = 0
+    for (const v of data) { const x = (v - 128) / 128; sum += x * x }
+    const level = Math.min(100, Math.round(Math.sqrt(sum / data.length) * 280))
+    const el = $('pf-meter-fill')
+    if (el) el.style.width = `${level}%`
+    raf = requestAnimationFrame(tick)
+  }
+  tick()
+  show('pf-meter')
+  preflightMeter = {
+    stop() {
+      if (raf) cancelAnimationFrame(raf)
+      ctx.close().catch(() => {})
+      stream.getTracks().forEach((t) => t.stop())
+      const el = $('pf-meter-fill')
+      if (el) el.style.width = '0%'
+      hide('pf-meter')
+    },
+  }
+}
+
+async function runPreflight() {
+  if (rec) return // don't probe devices mid-recording
+  setPreflightRow('mic', 'checking', 'Microphone', 'Checking…')
+  setPreflightRow('system', 'checking', 'Call audio source', 'Checking…')
+  setPreflightRow('disk', 'checking', 'Disk space', 'Checking…')
+
+  // Mic: open the selected device and run a live meter so the user can SEE input.
+  try {
+    const micId = $('mic').value
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { deviceId: micId ? { exact: micId } : undefined, echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+    })
+    startPreflightMeter(stream)
+    setPreflightRow('mic', 'ok', 'Microphone', 'Ready — speak and watch the level move.')
+  } catch (e) {
+    setPreflightRow('mic', 'fail', 'Microphone', `Not available (${e.name || e.message}). Allow microphone access in System Settings → Privacy & Security → Microphone, then re-check.`)
+  }
+
+  // Call-audio source: the BlackHole (or chosen) input that carries the meeting audio.
+  try {
+    const inputs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'audioinput')
+    const hasBlackhole = inputs.some((d) => /blackhole/i.test(d.label || ''))
+    const sysSel = $('system-source')
+    const selected = sysSel && sysSel.value
+    const selectedLabel = selected ? (inputs.find((d) => d.deviceId === selected)?.label || 'selected input') : ''
+    if (selected) setPreflightRow('system', 'ok', 'Call audio source', `Capturing “${selectedLabel}” — route the meeting into it via a Multi-Output Device.`)
+    else if (hasBlackhole) setPreflightRow('system', 'warn', 'Call audio source', 'BlackHole is available but not selected — pick it above to capture call audio.')
+    else setPreflightRow('system', 'warn', 'Call audio source', 'No system-audio source — install BlackHole 2ch (see README) to capture call audio.')
+  } catch {
+    setPreflightRow('system', 'warn', 'Call audio source', 'Could not check the system-audio source.')
+  }
+
+  // Disk space on the recordings volume (long meetings write a lot before upload).
+  try {
+    const info = await window.desktop.diskFree()
+    if (info && typeof info.freeBytes === 'number') {
+      const gb = info.freeBytes / (1024 ** 3)
+      const label = `${gb.toFixed(1)} GB free`
+      if (gb >= 2) setPreflightRow('disk', 'ok', 'Disk space', `${label} — plenty for a long meeting.`)
+      else if (gb >= 0.5) setPreflightRow('disk', 'warn', 'Disk space', `${label} — OK for a short meeting; free up space for long calls.`)
+      else setPreflightRow('disk', 'fail', 'Disk space', `${label} — too low; free up space before recording.`)
+    } else {
+      setPreflightRow('disk', 'skip', 'Disk space', 'Could not read free space (recording still works).')
+    }
+  } catch {
+    setPreflightRow('disk', 'skip', 'Disk space', 'Could not read free space (recording still works).')
+  }
 }
 
 async function populateMics() {
@@ -272,6 +380,7 @@ function flushSegment(key, track) {
 async function startRecording() {
   setStatus('', null)
   hide('open-link')
+  stopPreflightMeter() // release the preflight mic before opening the recording streams
   const micId = $('mic').value
   const systemId = $('system-source') ? $('system-source').value : ''
 
@@ -632,6 +741,9 @@ function wireEvents() {
   $('start-btn').onclick = startRecording
   $('pause-btn').onclick = togglePause
   $('stop-btn').onclick = stopRecording
+  $('preflight-btn').onclick = runPreflight
+  $('mic').onchange = () => { if (!rec) runPreflight() }
+  if ($('system-source')) $('system-source').onchange = () => { if (!rec) runPreflight() }
 
   // Guard against losing an in-progress recording on accidental close.
   window.addEventListener('beforeunload', (e) => {

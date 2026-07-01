@@ -12,6 +12,9 @@ contextBridge.exposeInMainWorld('desktop', {
 
   openExternal: (url) => ipcRenderer.invoke('open:external', url),
 
+  // Free disk space on the recordings volume (preflight); null if unavailable.
+  diskFree: () => ipcRenderer.invoke('disk:free'),
+
   // Local recording fallback / offline queue. Blobs cross IPC as ArrayBuffers.
   saveRecording: (localId, meta, segments) => ipcRenderer.invoke('rec:save', { localId, meta, segments }),
   listPending: () => ipcRenderer.invoke('rec:list'),

@@ -116,6 +116,18 @@ ipcMain.handle('open:external', async (_e, url) => {
   return true
 })
 
+// Free disk space on the recordings volume (preflight). statfs is Node 18.15+/Electron;
+// returns null if unavailable so the renderer degrades gracefully (recording still works).
+ipcMain.handle('disk:free', async () => {
+  try {
+    if (typeof fs.statfs !== 'function') return null
+    const s = await fs.statfs(USER_DATA())
+    return { freeBytes: s.bavail * s.bsize }
+  } catch {
+    return null
+  }
+})
+
 // ---------- IPC: local recording fallback / offline queue ----------
 function safeId(id) {
   return String(id || '').replace(/[^a-zA-Z0-9_-]/g, '')

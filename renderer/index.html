@@ -108,6 +108,18 @@
             meeting into BlackHole via a Multi-Output Device so it's captured — see the README. The
             “Call audio” meter below confirms it's working.</p>
 
+          <div class="preflight">
+            <div class="preflight-head">
+              <span>Device check</span>
+              <button id="preflight-btn" class="btn ghost small" type="button">Re-check</button>
+            </div>
+            <ul id="preflight-results" class="pf-list"></ul>
+            <div id="pf-meter" class="meter-row pf-meter hidden">
+              <span class="cap">Mic level</span>
+              <div class="meter"><div id="pf-meter-fill" class="meter-fill"></div></div>
+            </div>
+          </div>
+
           <p class="consent">🔴 Recording captures your mic and (if enabled) everyone on the call.
             Make sure participants consent before you start.</p>
 
