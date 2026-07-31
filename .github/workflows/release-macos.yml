@@ -37,7 +37,8 @@ jobs:
           FORGENOTES_SUPABASE_ANON_KEY: ${{ secrets.FORGENOTES_SUPABASE_ANON_KEY }}
 
       - name: Create checksum
-        run: shasum -a 256 release/ForgeNotes-Recorder.dmg > release/ForgeNotes-Recorder.dmg.sha256
+        working-directory: release
+        run: shasum -a 256 ForgeNotes-Recorder.dmg > ForgeNotes-Recorder.dmg.sha256
 
       - uses: actions/upload-artifact@v4
         with:
