@@ -1,5 +1,5 @@
 {
-  "_comment": "Copy to config.json and fill in the anon key. URL + host are the prod defaults. The anon key is the PUBLIC Supabase anon key (same one the web app ships) — never put the service-role key here.",
+  "_comment": "Copy to config.json for local development, or set FORGENOTES_SUPABASE_ANON_KEY when building. Only the PUBLIC anon JWT is accepted; never use a service-role key.",
   "supabaseUrl": "https://andrimdaxlxcqgqdqrbz.supabase.co",
   "supabaseAnonKey": "",
   "forgenotesHost": "https://notes.thecontentforge.io"

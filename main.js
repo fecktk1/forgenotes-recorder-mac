@@ -60,7 +60,9 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false, // preload needs require() for the IPC bridge
+      // Sandboxed preloads can still use Electron's contextBridge/ipcRenderer
+      // polyfill; this preload does not need unrestricted Node.js access.
+      sandbox: true,
     },
   })
 

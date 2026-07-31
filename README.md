@@ -1,103 +1,93 @@
 # ForgeNotes Recorder (macOS)
 
-Records a meeting as **two separate tracks** — your microphone (`mic`) and the meeting/call
-audio (`system`) — and uploads them straight into the ForgeNotes pipeline (the same
-`create-session → upload-file → finalize-session` flow the web app uses). Two clean tracks
-transcribe far better than one mixed track when people talk over each other.
+Records a meeting as two separate tracks — your microphone (`mic`) and the meeting/call audio
+(`system`) — and uploads them into the ForgeNotes pipeline. Separate tracks transcribe more
+reliably when people talk over each other.
 
-> This is the **macOS** build. The Windows build lives in a separate repo and captures system
-> audio via WASAPI loopback; macOS uses **BlackHole** instead (no screen-recording permission,
-> no native Swift/ScreenCaptureKit). The app UI, upload flow, and offline queue are the same.
+This repository is the macOS recorder. It captures call audio through **BlackHole 2ch** rather
+than ScreenCaptureKit, so it does not request screen-recording permission.
 
-## How audio capture works on macOS
+## Requirements
 
-macOS apps can't grab "system audio" directly, so we use **BlackHole 2ch**, a free virtual audio
-device. You route the meeting's sound into BlackHole; the recorder then captures BlackHole as just
-another input device (via `getUserMedia`). Your microphone is captured the same way.
+- macOS 12 Monterey or newer
+- Apple Silicon or 64-bit Intel Mac
+- Node.js 24 for development and release builds
+- BlackHole 2ch for capturing meeting audio
 
-- **Microphone** → captured from the mic you pick.
-- **Meeting / call audio** → captured from the **BlackHole 2ch** input you pick.
+## Internal installation
 
-The live **You / Call audio** meters in the app show whether each track is actually receiving
-sound — the Call meter moving means BlackHole is correctly routed.
+The distributed DMG is intentionally ad-hoc signed and not notarized. That keeps the app free for
+internal use, but macOS cannot establish publisher trust without an Apple Developer membership.
+After copying the app to Applications, an internal user must remove the quarantine attribute once:
 
-## One-time setup
+```sh
+xattr -dr com.apple.quarantine "/Applications/ForgeNotes Recorder.app"
+```
 
-1. **Install Node + BlackHole**
+Do not disable Gatekeeper globally or use `sudo`. See [INTERNAL_INSTALL.md](INTERNAL_INSTALL.md)
+for the complete installation and verification steps. Right-click → Open is not a dependable
+workaround for an unnotarized Electron bundle.
+
+## One-time audio setup
+
+1. Install BlackHole:
+
    ```sh
-   brew install node
    brew install blackhole-2ch
    ```
-2. **Create a Multi-Output Device** (so you still HEAR the call while it's also sent to BlackHole):
-   - Open **Audio MIDI Setup** (Spotlight → "Audio MIDI Setup").
-   - Click **+** (bottom-left) → **Create Multi-Output Device**.
-   - Tick **both** your normal output (e.g. MacBook speakers / headphones) **and** **BlackHole 2ch**.
-   - Name it e.g. "Meeting Output".
-3. **Route the meeting to it:** set your Mac's **output** to that Multi-Output Device (or set the
-   meeting app's output device to BlackHole 2ch) while recording. You'll still hear the call, and
-   BlackHole receives a copy for capture.
 
-## First-time run (dev)
+2. Open **Audio MIDI Setup** and create a **Multi-Output Device**.
+3. Select both your normal speakers/headphones and **BlackHole 2ch**.
+4. Route the meeting app's output to that Multi-Output Device.
+
+The recorder's **You** and **Call audio** meters confirm that both tracks are receiving audio.
+
+## Development
 
 ```sh
-npm install
+nvm use
+npm ci
 cp config.example.json config.json
-# open config.json and paste the PUBLIC Supabase anon key into "supabaseAnonKey"
+# Put only the PUBLIC Supabase anon JWT in config.json.
 npm start
 ```
-The anon key is the same value the web app ships (`VITE_SUPABASE_ANON_KEY` in Netlify). Never put
-the service-role key here. `config.json` is git-ignored.
 
-## Using it
+Authentication is retained through Electron `safeStorage`. Recordings are written to disk before
+upload; failed uploads remain in **Pending uploads** until retried or discarded.
 
-1. **Sign in** with your ForgeNotes account (must be on the allowlist). Stays signed in (encrypted
-   token via macOS Keychain/safeStorage).
-2. Pick your **Microphone**, and set **System audio source** to **BlackHole 2ch** (the app
-   auto-selects it if it sees it).
-3. **Start recording.** Watch the meters: **You** moves when you talk; **Call audio** moves when the
-   meeting plays through BlackHole. If "Call audio" stays flat, your Multi-Output routing isn't
-   sending the meeting into BlackHole.
-4. **Stop & upload** → **Open in ForgeNotes**; it transcribes with both speaker tracks.
+## Reproducible internal build
 
-## Offline / failed uploads
-
-Every recording is written to disk before upload. A failed upload (offline, expired token) shows
-under **Pending uploads** with **Retry** / **Discard** — nothing is lost. A successful upload
-removes the local copy.
-
-## Building a `.dmg`
+The build refuses to package a missing or privileged Supabase key. Set the public anon JWT in the
+environment (or provide a validated local `config.json`), then build:
 
 ```sh
+export FORGENOTES_SUPABASE_ANON_KEY='public-anon-jwt'
+npm ci
 npm run dist:mac
 ```
-Produces `release/ForgeNotes Recorder-<version>-arm64.dmg`, branded with the ForgeNotes icon. It's
-**ad-hoc signed** (`identity: null`) — no Apple Developer ID, no notarization. On first launch macOS
-warns about an unidentified developer; **right-click the app → Open** once to approve it. Acceptable
-for internal/single-user use. `NSMicrophoneUsageDescription` is set so the mic-permission prompt has
-a reason string. (If the build fails downloading Electron on Node 26, see Troubleshooting and build
-with Node 20/22 LTS.)
 
-## Troubleshooting
+This produces `release/ForgeNotes-Recorder.dmg` as a universal `arm64` + `x86_64` application.
+The build command:
 
-**`Error: Electron failed to install correctly` on `npm start`** — on **Node 24+/26**, npm blocks
-package install scripts AND Electron's binary downloader (`@electron/get`) fails silently, so the
-binary never lands. The reliable fix is to drop the matching Electron build in directly (Apple
-Silicon shown — use `darwin-x64` on an Intel Mac):
-```sh
-V=$(node -p "require('./node_modules/electron/package.json').version")
-curl -L -o /tmp/electron.zip "https://github.com/electron/electron/releases/download/v$V/electron-v$V-darwin-arm64.zip"
-rm -rf node_modules/electron/dist && mkdir -p node_modules/electron/dist
-unzip -q /tmp/electron.zip -d node_modules/electron/dist
-printf 'Electron.app/Contents/MacOS/Electron' > node_modules/electron/path.txt
-xattr -dr com.apple.quarantine node_modules/electron/dist 2>/dev/null
-npm start
-```
-The same `@electron/get` issue can break `npm run dist:mac`; if so, build with **Node 20/22 LTS**
-(e.g. via `nvm`) — the app itself runs fine on Node 26 once the binary is in place.
+1. validates that the configured Supabase JWT has the `anon` role;
+2. packages and ad-hoc signs every Electron executable;
+3. ad-hoc signs the outer DMG;
+4. mounts the DMG read-only and runs strict signature, bundle-ID, and architecture checks.
 
-## Notes / limitations (v1)
+Ad-hoc signing is selected deliberately with `mac.identity: "-"` and hardened runtime is disabled,
+as recommended by electron-builder for unsigned internal distribution. It removes the malformed
+signature that caused the old “damaged” installer, but it does **not** create Gatekeeper trust.
 
-- Each track uploads as a single complete `*.webm` (Opus) file (`seq: 0`), like a web manual upload;
-  the transcription worker speaker-labels `mic` vs `system`.
-- Requires the BlackHole + Multi-Output routing above — that's the macOS price for clean system audio
-  without screen-recording permissions.
+## GitHub release workflow
+
+Add the repository secret `FORGENOTES_SUPABASE_ANON_KEY`, containing only the public Supabase anon
+JWT. The macOS workflow can then be run manually to produce a verified artifact. Pushing a matching
+version tag (for example `v0.4.0`) also creates the GitHub release with a stable
+`ForgeNotes-Recorder.dmg` asset and SHA-256 checksum.
+
+## Current limitations
+
+- Call audio requires BlackHole and Multi-Output routing.
+- The app is an internal build, so every freshly downloaded copy needs the one-time quarantine
+  removal step.
+- The app does not currently perform automatic updates; install new internal releases manually.

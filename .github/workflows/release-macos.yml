@@ -1,0 +1,60 @@
+name: Build macOS internal release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: macos-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Confirm tag matches package version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: test "v$(node -p "require('./package.json').version")" = "$GITHUB_REF_NAME"
+
+      - run: npm ci
+
+      - name: Build and verify universal internal DMG
+        run: npm run dist:mac
+        env:
+          FORGENOTES_SUPABASE_ANON_KEY: ${{ secrets.FORGENOTES_SUPABASE_ANON_KEY }}
+
+      - name: Create checksum
+        run: shasum -a 256 release/ForgeNotes-Recorder.dmg > release/ForgeNotes-Recorder.dmg.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ForgeNotes-Recorder-macOS-${{ github.sha }}
+          path: |
+            release/ForgeNotes-Recorder.dmg
+            release/ForgeNotes-Recorder.dmg.sha256
+          if-no-files-found: error
+
+      - name: Publish tagged release
+        if: startsWith(github.ref, 'refs/tags/')
+        run: >-
+          gh release create "$GITHUB_REF_NAME"
+          release/ForgeNotes-Recorder.dmg
+          release/ForgeNotes-Recorder.dmg.sha256
+          --verify-tag
+          --title "$GITHUB_REF_NAME — internal macOS build"
+          --notes-file INTERNAL_INSTALL.md
+        env:
+          GH_TOKEN: ${{ github.token }}
