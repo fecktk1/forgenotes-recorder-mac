@@ -95,6 +95,20 @@ html, body {
 
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 
+.mode-toggle { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.mode-option {
+  height: 40px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2);
+  color: var(--muted);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.mode-option.active { border-color: var(--accent-strong); background: rgba(103, 232, 249, 0.1); color: var(--accent); }
+#system-audio-fields { display: flex; flex-direction: column; gap: 10px; }
+
 .checkbox { display: flex; align-items: center; gap: 9px; color: var(--muted); font-size: 13px; cursor: pointer; }
 .checkbox input { width: 16px; height: 16px; accent-color: var(--accent-strong); }
 

@@ -1,8 +1,8 @@
 # ForgeNotes Recorder (macOS)
 
-Records a meeting as two separate tracks — your microphone (`mic`) and the meeting/call audio
-(`system`) — and uploads them into the ForgeNotes pipeline. Separate tracks transcribe more
-reliably when people talk over each other.
+Supports two recording setups. **Online call** captures your microphone and BlackHole meeting
+audio as separate tracks. **In person / room** captures one room microphone and tells ForgeNotes
+to separate speakers during transcription.
 
 This repository is the macOS recorder. It captures call audio through **BlackHole 2ch** rather
 than ScreenCaptureKit, so it does not request screen-recording permission.
@@ -28,7 +28,16 @@ Do not disable Gatekeeper globally or use `sudo`. See [INTERNAL_INSTALL.md](INTE
 for the complete installation and verification steps. Right-click → Open is not a dependable
 workaround for an unnotarized Electron bundle.
 
-## One-time audio setup
+## Recording setups
+
+Choose **In person / room** when one microphone is capturing everyone nearby. BlackHole is hidden
+and not required in this mode. Put the microphone near the center of the room and verify the live
+level meter before recording.
+
+Choose **Online call** for Zoom, Meet, Discord, and similar calls. Call audio uses the following
+one-time BlackHole setup.
+
+## One-time online-call audio setup
 
 1. Install BlackHole:
 
@@ -82,8 +91,11 @@ signature that caused the old “damaged” installer, but it does **not** creat
 
 Add the repository secret `FORGENOTES_SUPABASE_ANON_KEY`, containing only the public Supabase anon
 JWT. The macOS workflow can then be run manually to produce a verified artifact. Pushing a matching
-version tag (for example `v0.4.0`) also creates the GitHub release with a stable
+version tag (for example `v0.5.0`) also creates the GitHub release with a stable
 `ForgeNotes-Recorder.dmg` asset and SHA-256 checksum.
+
+Long recordings remain segmented privately for reliable upload and processing. ForgeNotes creates
+one continuous playback asset after upload; the segments are not presented to users.
 
 ## Current limitations
 

@@ -70,6 +70,15 @@
             </select>
           </label>
 
+          <div class="field">
+            <span>Recording setup</span>
+            <div class="mode-toggle" role="group" aria-label="Recording setup">
+              <button id="mode-online" class="mode-option active" type="button">Online call</button>
+              <button id="mode-room" class="mode-option" type="button">In person / room</button>
+            </div>
+            <p id="mode-hint" class="hint">Captures your microphone and BlackHole call audio as separate tracks.</p>
+          </div>
+
           <div class="grid2">
             <label class="field">
               <span>Source</span>
@@ -96,17 +105,19 @@
           </div>
 
           <label class="field">
-            <span>Microphone</span>
+            <span id="mic-label">Microphone</span>
             <select id="mic"></select>
           </label>
 
-          <label class="field">
-            <span>System audio source</span>
-            <select id="system-source"></select>
-          </label>
-          <p class="hint">Pick <strong>BlackHole 2ch</strong> (auto-selected if found). Route the
-            meeting into BlackHole via a Multi-Output Device so it's captured — see the README. The
-            “Call audio” meter below confirms it's working.</p>
+          <div id="system-audio-fields">
+            <label class="field">
+              <span>System audio source</span>
+              <select id="system-source"></select>
+            </label>
+            <p class="hint">Pick <strong>BlackHole 2ch</strong> (auto-selected if found). Route the
+              meeting into BlackHole via a Multi-Output Device so it's captured — see the README. The
+              “Call audio” meter below confirms it's working.</p>
+          </div>
 
           <div class="preflight">
             <div class="preflight-head">
@@ -120,7 +131,7 @@
             </div>
           </div>
 
-          <p class="consent">🔴 Recording captures your mic and (if enabled) everyone on the call.
+          <p id="consent-copy" class="consent">🔴 Recording captures your mic and (if enabled) everyone on the call.
             Make sure participants consent before you start.</p>
 
           <div class="controls">
@@ -130,7 +141,7 @@
           </div>
 
           <div id="meters" class="meters hidden">
-            <div class="meter-row">
+            <div id="meter-system-row" class="meter-row">
               <span class="cap" id="cap-mic">You (mic)</span>
               <div class="meter"><div id="meter-mic" class="meter-fill"></div></div>
             </div>

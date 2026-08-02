@@ -125,6 +125,32 @@ async function enterRecorder() {
 }
 
 // ---------------------------------------------------------------- preflight
+function captureProfile() {
+  return $('mode-room')?.classList.contains('active') ? 'room_single_mic' : 'remote_dual_track'
+}
+
+function setCaptureProfile(profile, { syncSource = true, check = true } = {}) {
+  const room = profile === 'room_single_mic'
+  $('mode-room').classList.toggle('active', room)
+  $('mode-online').classList.toggle('active', !room)
+  $('system-audio-fields').classList.toggle('hidden', room)
+  $('meter-system-row').classList.toggle('hidden', room)
+  $('mic-label').textContent = room ? 'Room microphone' : 'Microphone'
+  $('cap-mic').textContent = room ? 'Room mic' : 'You (mic)'
+  $('mode-hint').textContent = room
+    ? 'Uses one microphone for everyone in the room and separates speakers during transcription.'
+    : 'Captures your microphone and BlackHole call audio as separate tracks.'
+  $('consent-copy').textContent = room
+    ? '🔴 Recording captures everyone in the room. Place the microphone near the center and make sure all participants consent.'
+    : '🔴 Recording captures your mic and (if enabled) everyone on the call. Make sure participants consent before you start.'
+  if (syncSource) {
+    if (room) $('source').value = 'in_person'
+    else if ($('source').value === 'in_person') $('source').value = 'other'
+  }
+  localStorage.setItem('forgenotes_capture_profile', room ? 'room_single_mic' : 'remote_dual_track')
+  if (check && !rec) runPreflight()
+}
+
 // A pre-record device check: is the mic live (with a level meter to prove it), is the
 // call-audio source (BlackHole) present + selected, and is there enough disk for a long
 // meeting? Purely informational — Start still works; capture errors also surface on Start.
@@ -198,18 +224,22 @@ async function runPreflight() {
     setPreflightRow('mic', 'fail', 'Microphone', `Not available (${e.name || e.message}). Allow microphone access in System Settings → Privacy & Security → Microphone, then re-check.`)
   }
 
-  // Call-audio source: the BlackHole (or chosen) input that carries the meeting audio.
-  try {
-    const inputs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'audioinput')
-    const hasBlackhole = inputs.some((d) => /blackhole/i.test(d.label || ''))
-    const sysSel = $('system-source')
-    const selected = sysSel && sysSel.value
-    const selectedLabel = selected ? (inputs.find((d) => d.deviceId === selected)?.label || 'selected input') : ''
-    if (selected) setPreflightRow('system', 'ok', 'Call audio source', `Capturing “${selectedLabel}” — route the meeting into it via a Multi-Output Device.`)
-    else if (hasBlackhole) setPreflightRow('system', 'warn', 'Call audio source', 'BlackHole is available but not selected — pick it above to capture call audio.')
-    else setPreflightRow('system', 'warn', 'Call audio source', 'No system-audio source — install BlackHole 2ch (see README) to capture call audio.')
-  } catch {
-    setPreflightRow('system', 'warn', 'Call audio source', 'Could not check the system-audio source.')
+  if (captureProfile() === 'room_single_mic') {
+    setPreflightRow('system', 'ok', 'Recording setup', 'Room microphone only — BlackHole is not needed.')
+  } else {
+    // Call-audio source: the BlackHole (or chosen) input that carries the meeting audio.
+    try {
+      const inputs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'audioinput')
+      const hasBlackhole = inputs.some((d) => /blackhole/i.test(d.label || ''))
+      const sysSel = $('system-source')
+      const selected = sysSel && sysSel.value
+      const selectedLabel = selected ? (inputs.find((d) => d.deviceId === selected)?.label || 'selected input') : ''
+      if (selected) setPreflightRow('system', 'ok', 'Call audio source', `Capturing “${selectedLabel}” — route the meeting into it via a Multi-Output Device.`)
+      else if (hasBlackhole) setPreflightRow('system', 'warn', 'Call audio source', 'BlackHole is available but not selected — pick it above to capture call audio.')
+      else setPreflightRow('system', 'warn', 'Call audio source', 'No system-audio source — install BlackHole 2ch (see README) to capture call audio.')
+    } catch {
+      setPreflightRow('system', 'warn', 'Call audio source', 'Could not check the system-audio source.')
+    }
   }
 
   // Disk space on the recordings volume (long meetings write a lot before upload).
@@ -337,16 +367,17 @@ function setupMeters(micStream, systemStream) {
 function startTrackSegment(track, stream) {
   if (!stream) return null
   const chunks = []
+  const startOffsetMs = elapsedMs()
   const recorder = new MediaRecorder(stream, rec.mime ? { mimeType: rec.mime } : undefined)
   recorder.ondataavailable = (e) => {
     if (e.data && e.data.size) chunks.push(e.data)
   }
   recorder.onstop = () => {
     const blob = new Blob(chunks, { type: rec ? rec.mime : 'audio/webm' })
-    if (blob.size && rec) rec.segments.push({ track, blob })
+    if (blob.size && rec) rec.segments.push({ track, blob, startOffsetMs, durationMs: Math.max(0, elapsedMs() - startOffsetMs) })
   }
   recorder.start(1000)
-  return { recorder, chunks }
+  return { recorder, chunks, startOffsetMs }
 }
 
 // Rotate every ROTATE_MS: stop the current segment recorders (their onstop banks the
@@ -369,7 +400,7 @@ function flushSegment(key, track) {
     if (!seg || !seg.recorder) return resolve()
     seg.recorder.onstop = () => {
       const blob = new Blob(seg.chunks, { type: rec ? rec.mime || 'audio/webm' : 'audio/webm' })
-      if (blob.size && rec) rec.segments.push({ track, blob })
+      if (blob.size && rec) rec.segments.push({ track, blob, startOffsetMs: seg.startOffsetMs, durationMs: Math.max(0, elapsedMs() - seg.startOffsetMs) })
       resolve()
     }
     if (seg.recorder.state !== 'inactive') seg.recorder.stop()
@@ -382,7 +413,8 @@ async function startRecording() {
   hide('open-link')
   stopPreflightMeter() // release the preflight mic before opening the recording streams
   const micId = $('mic').value
-  const systemId = $('system-source') ? $('system-source').value : ''
+  const profile = captureProfile()
+  const systemId = profile === 'remote_dual_track' && $('system-source') ? $('system-source').value : ''
 
   let micStream
   try {
@@ -418,7 +450,7 @@ async function startRecording() {
       warning = `Could not open the system-audio device (${e.name}: ${e.message}) — recording mic only. Is BlackHole installed and selected?`
       console.error('[forgenotes] system getUserMedia failed:', e)
     }
-  } else {
+  } else if (profile === 'remote_dual_track') {
     warning = 'No system-audio source selected — recording mic only. Pick BlackHole 2ch to capture the meeting.'
   }
 
@@ -434,6 +466,7 @@ async function startRecording() {
     meta: {
       title: $('title').value.trim(),
       source_type: $('source').value,
+      capture_profile: profile,
       visibility: $('visibility').value,
       template_key: $('template').value,
     },
@@ -454,8 +487,13 @@ async function startRecording() {
   // Persistent capture status + live meters — the "Call audio" bar moving means the
   // meeting is actually being captured; flat means mic-only.
   const sysEl = $('cap-system')
-  sysEl.textContent = systemStream ? 'Call audio: capturing' : 'Call audio: NOT captured — mic only'
-  sysEl.className = systemStream ? 'cap ok' : 'cap bad'
+  if (profile === 'room_single_mic') {
+    sysEl.textContent = 'Room microphone only'
+    sysEl.className = 'cap ok'
+  } else {
+    sysEl.textContent = systemStream ? 'Call audio: capturing' : 'Call audio: NOT captured — mic only'
+    sysEl.className = systemStream ? 'cap ok' : 'cap bad'
+  }
   rec.meters = setupMeters(micStream, systemStream)
   show('meters')
 
@@ -486,10 +524,14 @@ function togglePause() {
   }
 }
 
-function elapsedSec() {
+function elapsedMs() {
   if (!rec) return 0
   const paused = rec.paused ? Date.now() - rec.pauseStart : 0
-  return Math.max(0, Math.round((Date.now() - rec.startedAt - rec.pausedMs - paused) / 1000))
+  return Math.max(0, Date.now() - rec.startedAt - rec.pausedMs - paused)
+}
+
+function elapsedSec() {
+  return Math.round(elapsedMs() / 1000)
 }
 
 function updateTimer() {
@@ -519,7 +561,7 @@ async function stopRecording() {
   if (rec.systemStream) rec.systemStream.getTracks().forEach((t) => t.stop())
 
   const segments = rec.segments
-  const durationSec = Math.max(1, Math.round((Date.now() - rec.startedAt - rec.pausedMs) / 1000))
+  const durationSec = Math.max(1, Math.round(elapsedMs() / 1000))
   const baseMeta = { ...rec.meta, durationSec, createdAt: new Date().toISOString() }
   const localId = `rec_${rec.startedAt}`
   rec = null
@@ -532,13 +574,13 @@ async function stopRecording() {
 
   // Assign each track its own seq 0,1,2,… in chronological order.
   const seqByTrack = {}
-  const seqd = segments.map((s) => {
+  const seqd = [...segments].sort((a, b) => (a.startOffsetMs - b.startOffsetMs) || a.track.localeCompare(b.track)).map((s) => {
     seqByTrack[s.track] = seqByTrack[s.track] === undefined ? 0 : seqByTrack[s.track] + 1
-    return { track: s.track, seq: seqByTrack[s.track], blob: s.blob }
+    return { track: s.track, seq: seqByTrack[s.track], blob: s.blob, startOffsetMs: s.startOffsetMs, durationMs: s.durationMs }
   })
   const meta = {
     ...baseMeta,
-    segments: seqd.map((s) => ({ track: s.track, seq: s.seq })),
+    segments: seqd.map((s) => ({ track: s.track, seq: s.seq, startOffsetMs: s.startOffsetMs, durationMs: s.durationMs })),
     tracks: Array.from(new Set(seqd.map((s) => s.track))),
   }
 
@@ -570,6 +612,7 @@ async function uploadSegments(localId, meta, seqd) {
       body: {
         title: meta.title || 'Untitled meeting',
         source_type: meta.source_type || 'other',
+        capture_profile: meta.capture_profile || (meta.source_type === 'in_person' ? 'room_single_mic' : 'remote_dual_track'),
         visibility: meta.visibility || 'private',
         template_key: meta.template_key || 'general',
         tags: [],
@@ -584,6 +627,10 @@ async function uploadSegments(localId, meta, seqd) {
       fd.append('session_id', sessionId)
       fd.append('track', s.track)
       fd.append('seq', String(s.seq))
+      if (s.startOffsetMs != null) fd.append('start_offset_ms', String(s.startOffsetMs))
+      if (s.durationMs != null) fd.append('duration_ms', String(s.durationMs))
+      const digest = await crypto.subtle.digest('SHA-256', await s.blob.arrayBuffer())
+      fd.append('sha256', Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, '0')).join(''))
       fd.append('file', s.blob, `${s.track}-${s.seq}.webm`)
       await callFn('forgenotes-upload-file', { formData: fd })
       done += 1
@@ -636,8 +683,8 @@ async function refreshPending() {
     sub.className = 's'
     const when = formatWhen(item.meta.createdAt)
     const tracks = (item.meta.tracks || []).join(' + ')
-    const segCount = (item.meta.segments || []).length
-    sub.textContent = `${when} · ${tracks} · ${item.meta.durationSec || 0}s${segCount ? ` · ${segCount} parts` : ''}`
+    const setup = item.meta.capture_profile === 'room_single_mic' ? 'in person' : 'online call'
+    sub.textContent = `${when} · ${setup} · ${tracks} · ${item.meta.durationSec || 0}s`
     meta.appendChild(title)
     meta.appendChild(sub)
 
@@ -669,11 +716,16 @@ async function retryPending(localId, btn) {
   btn.textContent = 'Uploading…'
   try {
     const { meta, segments } = await window.desktop.readRecording(localId)
-    const seqd = (segments || []).map((s) => ({
-      track: s.track,
-      seq: s.seq,
-      blob: new Blob([s.data], { type: 'audio/webm' }),
-    }))
+    const seqd = (segments || []).map((s) => {
+      const stored = (meta.segments || []).find((row) => row.track === s.track && row.seq === s.seq) || {}
+      return {
+        track: s.track,
+        seq: s.seq,
+        startOffsetMs: stored.startOffsetMs,
+        durationMs: stored.durationMs,
+        blob: new Blob([s.data], { type: 'audio/webm' }),
+      }
+    })
     if (!seqd.length) throw new Error('No audio on disk')
     await uploadSegments(localId, meta, seqd)
   } catch (e) {
@@ -744,6 +796,10 @@ function wireEvents() {
   $('preflight-btn').onclick = runPreflight
   $('mic').onchange = () => { if (!rec) runPreflight() }
   if ($('system-source')) $('system-source').onchange = () => { if (!rec) runPreflight() }
+  $('mode-online').onclick = () => setCaptureProfile('remote_dual_track')
+  $('mode-room').onclick = () => setCaptureProfile('room_single_mic')
+  $('source').onchange = () => setCaptureProfile($('source').value === 'in_person' ? 'room_single_mic' : 'remote_dual_track', { syncSource: false })
+  setCaptureProfile(localStorage.getItem('forgenotes_capture_profile') === 'room_single_mic' ? 'room_single_mic' : 'remote_dual_track', { check: false })
 
   // Guard against losing an in-progress recording on accidental close.
   window.addEventListener('beforeunload', (e) => {
