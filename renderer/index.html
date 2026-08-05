@@ -58,15 +58,38 @@
 
           <label class="field">
             <span>Template</span>
-            <!-- keys mirror supabase/functions/_shared/forgenotes-templates.ts (source of truth) -->
+            <!-- keys mirror supabase/functions/_shared/forgenotes-templates.ts (source of truth).
+                 The empty option means "no explicit pick": template_key is OMITTED from the
+                 create-session body and the server applies the user's saved default
+                 (forgenotes_user_settings.default_template_key, /notes/settings). -->
             <select id="template">
-              <option value="general" selected>General</option>
-              <option value="one_on_one">1:1</option>
-              <option value="standup">Standup</option>
-              <option value="sales_call">Sales call</option>
-              <option value="investor_call">Investor call</option>
-              <option value="interview">Interview</option>
-              <option value="client_project">Client / project</option>
+              <option value="" selected>Use my account default</option>
+              <option value="general">General</option>
+              <optgroup label="Internal">
+                <option value="one_on_one">1:1</option>
+                <option value="standup">Standup</option>
+                <option value="team_meeting">Team meeting</option>
+                <option value="retrospective">Retrospective</option>
+                <option value="planning">Planning</option>
+                <option value="brainstorm">Brainstorm</option>
+              </optgroup>
+              <optgroup label="External">
+                <option value="sales_call">Sales call</option>
+                <option value="investor_call">Investor call</option>
+                <option value="interview">Interview</option>
+                <option value="client_project">Client / project</option>
+                <option value="customer_support">Support call</option>
+              </optgroup>
+              <optgroup label="Formal">
+                <option value="board_meeting">Board meeting</option>
+                <option value="incident_review">Incident review</option>
+              </optgroup>
+              <optgroup label="Content &amp; community">
+                <option value="training">Training</option>
+                <option value="seminar">Seminar</option>
+                <option value="community_call">Community call</option>
+                <option value="content_recording">Content recording</option>
+              </optgroup>
             </select>
           </label>
 

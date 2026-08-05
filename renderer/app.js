@@ -608,16 +608,18 @@ function resetControls() {
 async function uploadSegments(localId, meta, seqd) {
   setStatus(`Uploading ${seqd.length} segment${seqd.length === 1 ? '' : 's'} to ForgeNotes…`, 'busy')
   try {
-    const created = await callFn('forgenotes-create-session', {
-      body: {
-        title: meta.title || 'Untitled meeting',
-        source_type: meta.source_type || 'other',
-        capture_profile: meta.capture_profile || (meta.source_type === 'in_person' ? 'room_single_mic' : 'remote_dual_track'),
-        visibility: meta.visibility || 'private',
-        template_key: meta.template_key || 'general',
-        tags: [],
-      },
-    })
+    const body = {
+      title: meta.title || 'Untitled meeting',
+      source_type: meta.source_type || 'other',
+      capture_profile: meta.capture_profile || (meta.source_type === 'in_person' ? 'room_single_mic' : 'remote_dual_track'),
+      visibility: meta.visibility || 'private',
+      tags: [],
+    }
+    // Empty pick = "Use my account default": OMIT template_key entirely so the server
+    // (forgenotes-create-session) applies forgenotes_user_settings.default_template_key.
+    // An explicit pick — including General — is always sent and always wins.
+    if (meta.template_key) body.template_key = meta.template_key
+    const created = await callFn('forgenotes-create-session', { body })
     const sessionId = created.session && created.session.id
     if (!sessionId) throw new Error('No session id returned')
 
