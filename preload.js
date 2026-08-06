@@ -15,6 +15,9 @@ contextBridge.exposeInMainWorld('desktop', {
   // Free disk space on the recordings volume (preflight); null if unavailable.
   diskFree: () => ipcRenderer.invoke('disk:free'),
 
+  // Append a line to the upload diagnostics log (userData/upload-log.txt).
+  appendLog: (line) => ipcRenderer.invoke('log:append', line),
+
   // Local recording fallback / offline queue. Blobs cross IPC as ArrayBuffers.
   saveRecording: (localId, meta, segments) => ipcRenderer.invoke('rec:save', { localId, meta, segments }),
   listPending: () => ipcRenderer.invoke('rec:list'),

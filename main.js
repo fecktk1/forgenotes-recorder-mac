@@ -130,6 +130,28 @@ ipcMain.handle('disk:free', async () => {
   }
 })
 
+// ---------- IPC: upload diagnostics log ----------
+// Failed uploads used to leave only a transient status line; this keeps the real error
+// (status, chunk, attempt) on disk at userData/upload-log.txt for support/debugging.
+const LOG_FILE = () => path.join(USER_DATA(), 'upload-log.txt')
+const LOG_MAX_BYTES = 512 * 1024
+
+ipcMain.handle('log:append', async (_e, line) => {
+  try {
+    const file = LOG_FILE()
+    try {
+      const stat = await fs.stat(file)
+      if (stat.size > LOG_MAX_BYTES) await fs.rename(file, `${file}.1`) // keep one rotation
+    } catch {
+      // no log yet
+    }
+    await fs.appendFile(file, `${new Date().toISOString()} ${String(line ?? '')}\n`, 'utf8')
+  } catch {
+    // diagnostics only — never fail the caller
+  }
+  return true
+})
+
 // ---------- IPC: local recording fallback / offline queue ----------
 function safeId(id) {
   return String(id || '').replace(/[^a-zA-Z0-9_-]/g, '')

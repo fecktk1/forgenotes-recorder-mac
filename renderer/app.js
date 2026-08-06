@@ -111,7 +111,16 @@ async function callFn(name, { body, formData } = {}) {
   } catch {
     data = { raw: text }
   }
-  if (!res.ok) throw new Error(data.error || data.message || `${name} failed (${res.status})`)
+  if (!res.ok) {
+    // Surface the server's detail (e.g. the real Storage error) and keep the HTTP status
+    // on the error so the upload loop can tell a 4xx rejection from a retryable 5xx.
+    const message = data.detail
+      ? `${data.error || 'error'}: ${data.detail}`
+      : (data.error || data.message || `${name} failed (${res.status})`)
+    const err = new Error(message)
+    err.httpStatus = res.status
+    throw err
+  }
   return data
 }
 
@@ -605,15 +614,83 @@ function resetControls() {
 }
 
 // ---------------------------------------------------------------- upload
+// Recordings whose upload run is currently in flight. Guards the pending list's Retry
+// button from starting a second parallel run of the same recording — the source of
+// duplicate double-uploaded (and double-transcribed) meetings.
+const activeUploads = new Set()
+
+const CHUNK_ATTEMPTS = 3
+const CHUNK_RETRY_DELAYS_MS = [1000, 4000, 10000]
+
+async function sha256Hex(buf) {
+  const digest = await crypto.subtle.digest('SHA-256', buf)
+  return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, '0')).join('')
+}
+
+// Local diagnostics trail (userData/upload-log.txt) so a failed upload leaves the REAL
+// error on disk, not just a transient status line. Must never break the upload itself.
+async function diag(line) {
+  try { await window.desktop.appendLog(line) } catch { /* diagnostics only */ }
+}
+
+// One segment with retry: network drops and 5xx are transient — back off and retry;
+// a 4xx is a real rejection — fail fast. One failed chunk no longer kills the run
+// on the first try.
+async function uploadSegmentWithRetry(sessionId, s, sha) {
+  let lastErr = null
+  for (let attempt = 1; attempt <= CHUNK_ATTEMPTS; attempt++) {
+    const fd = new FormData()
+    fd.append('session_id', sessionId)
+    fd.append('track', s.track)
+    fd.append('seq', String(s.seq))
+    if (s.startOffsetMs != null) fd.append('start_offset_ms', String(s.startOffsetMs))
+    if (s.durationMs != null) fd.append('duration_ms', String(s.durationMs))
+    fd.append('sha256', sha)
+    fd.append('file', s.blob, `${s.track}-${s.seq}.webm`)
+    try {
+      return await callFn('forgenotes-upload-file', { formData: fd })
+    } catch (e) {
+      lastErr = e
+      const status = e.httpStatus || 0
+      await diag(`upload ${s.track}-${s.seq} attempt ${attempt}/${CHUNK_ATTEMPTS} failed: ${e.message}${status ? ` (HTTP ${status})` : ' (network)'}`)
+      const retryable = !status || status >= 500
+      if (!retryable || attempt === CHUNK_ATTEMPTS) throw e
+      setStatus(`${s.track}-${s.seq} failed (${e.message}) — retrying…`, 'warn')
+      await new Promise((resolve) => setTimeout(resolve, CHUNK_RETRY_DELAYS_MS[attempt - 1]))
+    }
+  }
+  throw lastErr
+}
+
+function showUploaded(sessionId, message) {
+  const url = `${CFG.forgenotesHost}/notes/m/${sessionId}`
+  setStatus(message, 'ok')
+  const link = $('open-link')
+  link.classList.remove('hidden')
+  link.onclick = (e) => {
+    e.preventDefault()
+    window.desktop.openExternal(url)
+  }
+}
+
 async function uploadSegments(localId, meta, seqd) {
-  setStatus(`Uploading ${seqd.length} segment${seqd.length === 1 ? '' : 's'} to ForgeNotes…`, 'busy')
+  if (activeUploads.has(localId)) {
+    setStatus('This recording is already uploading — hang tight.', 'warn')
+    return
+  }
+  activeUploads.add(localId)
   try {
+    setStatus(`Uploading ${seqd.length} segment${seqd.length === 1 ? '' : 's'} to ForgeNotes…`, 'busy')
     const body = {
       title: meta.title || 'Untitled meeting',
       source_type: meta.source_type || 'other',
       capture_profile: meta.capture_profile || (meta.source_type === 'in_person' ? 'room_single_mic' : 'remote_dual_track'),
       visibility: meta.visibility || 'private',
       tags: [],
+      // Stable per-recording ref: a retry reattaches to the SAME server session and
+      // skips chunks the server already has, instead of re-uploading everything into
+      // a fresh duplicate session.
+      client_ref: localId,
     }
     // Empty pick = "Use my account default": OMIT template_key entirely so the server
     // (forgenotes-create-session) applies forgenotes_user_settings.default_template_key.
@@ -623,20 +700,34 @@ async function uploadSegments(localId, meta, seqd) {
     const sessionId = created.session && created.session.id
     if (!sessionId) throw new Error('No session id returned')
 
+    // A previous run may have fully uploaded + finalized this recording (e.g. a retry
+    // that raced the automatic post-stop upload). Nothing to upload — clear the local
+    // copy and link to the meeting.
+    const sessionStatus = String((created.session && created.session.status) || '')
+    if (created.existing && sessionStatus && sessionStatus !== 'created' && sessionStatus !== 'uploading') {
+      await window.desktop.deleteRecording(localId)
+      await refreshPending()
+      await diag(`upload skipped for ${localId}: session ${sessionId} already ${sessionStatus}`)
+      showUploaded(sessionId, 'Already uploaded — ForgeNotes has this meeting.')
+      return
+    }
+
+    const have = new Map()
+    for (const c of created.chunks || []) have.set(`${c.track}:${c.seq}`, c)
+
     let done = 0
+    let resumed = 0
     for (const s of seqd) {
-      const fd = new FormData()
-      fd.append('session_id', sessionId)
-      fd.append('track', s.track)
-      fd.append('seq', String(s.seq))
-      if (s.startOffsetMs != null) fd.append('start_offset_ms', String(s.startOffsetMs))
-      if (s.durationMs != null) fd.append('duration_ms', String(s.durationMs))
-      const digest = await crypto.subtle.digest('SHA-256', await s.blob.arrayBuffer())
-      fd.append('sha256', Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, '0')).join(''))
-      fd.append('file', s.blob, `${s.track}-${s.seq}.webm`)
-      await callFn('forgenotes-upload-file', { formData: fd })
+      const sha = await sha256Hex(await s.blob.arrayBuffer())
+      const prev = have.get(`${s.track}:${s.seq}`)
+      const alreadyUploaded = prev && (prev.sha256 ? prev.sha256 === sha : Number(prev.bytes) === s.blob.size)
+      if (alreadyUploaded) {
+        resumed += 1
+      } else {
+        await uploadSegmentWithRetry(sessionId, s, sha)
+      }
       done += 1
-      setStatus(`Uploading… ${done}/${seqd.length}`, 'busy')
+      setStatus(`Uploading… ${done}/${seqd.length}${resumed ? ` (${resumed} already done)` : ''}`, 'busy')
     }
 
     await callFn('forgenotes-finalize-session', {
@@ -645,18 +736,15 @@ async function uploadSegments(localId, meta, seqd) {
 
     await window.desktop.deleteRecording(localId)
     await refreshPending()
+    await diag(`upload complete ${localId} -> session ${sessionId} (${seqd.length} segments, ${resumed} resumed)`)
 
-    const url = `${CFG.forgenotesHost}/notes/m/${sessionId}`
-    setStatus('Uploaded. ForgeNotes is transcribing it now.', 'ok')
-    const link = $('open-link')
-    link.classList.remove('hidden')
-    link.onclick = (e) => {
-      e.preventDefault()
-      window.desktop.openExternal(url)
-    }
+    showUploaded(sessionId, 'Uploaded. ForgeNotes is transcribing it now.')
     $('title').value = ''
   } catch (e) {
     setStatus(`Upload failed — saved on this device, retry below. (${e.message})`, 'error')
+    await diag(`upload run failed for ${localId}: ${e.message}${e.httpStatus ? ` (HTTP ${e.httpStatus})` : ''}`)
+  } finally {
+    activeUploads.delete(localId)
     await refreshPending()
   }
 }
@@ -694,7 +782,14 @@ async function refreshPending() {
     actions.className = 'actions'
     const retry = document.createElement('button')
     retry.className = 'btn primary'
-    retry.textContent = 'Retry'
+    // While this recording's upload run is in flight, Retry must not start a second
+    // parallel run (that's how duplicate meetings were created).
+    if (activeUploads.has(item.localId)) {
+      retry.textContent = 'Uploading…'
+      retry.disabled = true
+    } else {
+      retry.textContent = 'Retry'
+    }
     retry.onclick = () => retryPending(item.localId, retry)
     const discard = document.createElement('button')
     discard.className = 'btn ghost'
@@ -712,6 +807,10 @@ async function refreshPending() {
 async function retryPending(localId, btn) {
   if (!auth) {
     setStatus('Sign in first, then retry.', 'warn')
+    return
+  }
+  if (activeUploads.has(localId)) {
+    setStatus('This recording is already uploading — hang tight.', 'warn')
     return
   }
   btn.disabled = true
