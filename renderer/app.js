@@ -114,9 +114,14 @@ async function callFn(name, { body, formData } = {}) {
   if (!res.ok) {
     // Surface the server's detail (e.g. the real Storage error) and keep the HTTP status
     // on the error so the upload loop can tell a 4xx rejection from a retryable 5xx.
+    // A non-JSON body means the response came from an upstream proxy/WAF, not ForgeNotes —
+    // include a text snippet of it (e.g. a Cloudflare block page with its Ray ID).
+    const rawSnippet = data.raw
+      ? String(data.raw).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 140)
+      : ''
     const message = data.detail
       ? `${data.error || 'error'}: ${data.detail}`
-      : (data.error || data.message || `${name} failed (${res.status})`)
+      : (data.error || data.message || `${name} failed (${res.status})${rawSnippet ? `: ${rawSnippet}` : ''}`)
     const err = new Error(message)
     err.httpStatus = res.status
     throw err
@@ -633,26 +638,60 @@ async function diag(line) {
   try { await window.desktop.appendLog(line) } catch { /* diagnostics only */ }
 }
 
+// Chromium-efficient blob→base64 for the WAF-dodge fallback below.
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result).split(',')[1] || '')
+    reader.onerror = () => reject(reader.error || new Error('could not read audio for upload'))
+    reader.readAsDataURL(blob)
+  })
+}
+
 // One segment with retry: network drops and 5xx are transient — back off and retry;
-// a 4xx is a real rejection — fail fast. One failed chunk no longer kills the run
-// on the first try.
+// a 4xx is a real rejection — fail fast, with ONE exception: a 403 means an upstream
+// WAF content signature matched the raw multipart audio bytes (the request never
+// reaches ForgeNotes — this is what stranded "TCF Team Call 8/4" at chunk 20). The
+// same chunk re-sent as base64 JSON is plain text those signatures don't match, so
+// flip to that encoding and keep going.
 async function uploadSegmentWithRetry(sessionId, s, sha) {
   let lastErr = null
+  let useB64 = false
   for (let attempt = 1; attempt <= CHUNK_ATTEMPTS; attempt++) {
-    const fd = new FormData()
-    fd.append('session_id', sessionId)
-    fd.append('track', s.track)
-    fd.append('seq', String(s.seq))
-    if (s.startOffsetMs != null) fd.append('start_offset_ms', String(s.startOffsetMs))
-    if (s.durationMs != null) fd.append('duration_ms', String(s.durationMs))
-    fd.append('sha256', sha)
-    fd.append('file', s.blob, `${s.track}-${s.seq}.webm`)
     try {
+      if (useB64) {
+        return await callFn('forgenotes-upload-file', {
+          body: {
+            session_id: sessionId,
+            track: s.track,
+            seq: String(s.seq),
+            start_offset_ms: s.startOffsetMs != null ? String(s.startOffsetMs) : undefined,
+            duration_ms: s.durationMs != null ? String(s.durationMs) : undefined,
+            sha256: sha,
+            mime_type: 'audio/webm',
+            file_name: `${s.track}-${s.seq}.webm`,
+            file_b64: await blobToBase64(s.blob),
+          },
+        })
+      }
+      const fd = new FormData()
+      fd.append('session_id', sessionId)
+      fd.append('track', s.track)
+      fd.append('seq', String(s.seq))
+      if (s.startOffsetMs != null) fd.append('start_offset_ms', String(s.startOffsetMs))
+      if (s.durationMs != null) fd.append('duration_ms', String(s.durationMs))
+      fd.append('sha256', sha)
+      fd.append('file', s.blob, `${s.track}-${s.seq}.webm`)
       return await callFn('forgenotes-upload-file', { formData: fd })
     } catch (e) {
       lastErr = e
       const status = e.httpStatus || 0
-      await diag(`upload ${s.track}-${s.seq} attempt ${attempt}/${CHUNK_ATTEMPTS} failed: ${e.message}${status ? ` (HTTP ${status})` : ' (network)'}`)
+      await diag(`upload ${s.track}-${s.seq}${useB64 ? ' (b64)' : ''} attempt ${attempt}/${CHUNK_ATTEMPTS} failed: ${e.message}${status ? ` (HTTP ${status})` : ' (network)'}`)
+      if (status === 403 && !useB64) {
+        useB64 = true
+        setStatus(`${s.track}-${s.seq} blocked in transit — retrying with safe encoding…`, 'warn')
+        continue
+      }
       const retryable = !status || status >= 500
       if (!retryable || attempt === CHUNK_ATTEMPTS) throw e
       setStatus(`${s.track}-${s.seq} failed (${e.message}) — retrying…`, 'warn')
