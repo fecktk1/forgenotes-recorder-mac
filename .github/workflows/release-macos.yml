@@ -45,18 +45,28 @@ jobs:
           fi
           test -d node_modules/electron/dist
 
-      # electron-builder reads the App Store Connect key from a file path, so the base64
-      # secret has to land on disk first. runner.temp is wiped when the job ends.
-      - name: Stage notarization key
-        run: echo "${{ secrets.APPLE_API_KEY_BASE64 }}" | base64 --decode > "${{ runner.temp }}/AuthKey.p8"
+      # Both signing secrets are decoded to files rather than passed as base64 strings.
+      # CSC_LINK does accept inline base64, but macOS `base64` wraps its output at 76
+      # columns, and a wrapped value stops looking like base64 to electron-builder — which
+      # then treats it as a FILE PATH and fails with "<secret> doesn't exist", masked in the
+      # log so the real cause is invisible. Decoding here tolerates wrapped or unwrapped
+      # input. runner.temp is wiped when the job ends.
+      - name: Stage signing secrets
+        run: |
+          echo "${{ secrets.MAC_CERT_P12_BASE64 }}" | base64 --decode > "${{ runner.temp }}/cert.p12"
+          echo "${{ secrets.APPLE_API_KEY_BASE64 }}" | base64 --decode > "${{ runner.temp }}/AuthKey.p8"
+          # Fail here, with a clear message, rather than deep inside electron-builder.
+          test -s "${{ runner.temp }}/cert.p12" || { echo "MAC_CERT_P12_BASE64 decoded to nothing" >&2; exit 1; }
+          test -s "${{ runner.temp }}/AuthKey.p8" || { echo "APPLE_API_KEY_BASE64 decoded to nothing" >&2; exit 1; }
+          head -c 4 "${{ runner.temp }}/AuthKey.p8" | grep -q -- "----" || { echo "APPLE_API_KEY_BASE64 is not a PEM key" >&2; exit 1; }
 
       - name: Build, sign, notarize and verify universal DMG
         run: npm run dist:mac
         env:
           FORGENOTES_SUPABASE_ANON_KEY: ${{ secrets.FORGENOTES_SUPABASE_ANON_KEY }}
           # Developer ID certificate. electron-builder imports this into a throwaway
-          # keychain for the job; CSC_LINK accepts base64 content directly.
-          CSC_LINK: ${{ secrets.MAC_CERT_P12_BASE64 }}
+          # keychain for the job, from the file staged above.
+          CSC_LINK: ${{ runner.temp }}/cert.p12
           CSC_KEY_PASSWORD: ${{ secrets.MAC_CERT_P12_PASSWORD }}
           # Notarization credentials.
           APPLE_API_KEY: ${{ runner.temp }}/AuthKey.p8
@@ -64,9 +74,9 @@ jobs:
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
-      - name: Remove notarization key
+      - name: Remove signing secrets
         if: always()
-        run: rm -f "${{ runner.temp }}/AuthKey.p8"
+        run: rm -f "${{ runner.temp }}/AuthKey.p8" "${{ runner.temp }}/cert.p12"
 
       # Without latest-mac.yml every installed copy silently stops updating, and nothing
       # else in the job would fail. Check for it explicitly.
