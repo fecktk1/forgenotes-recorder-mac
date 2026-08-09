@@ -1,38 +1,44 @@
 # Installing ForgeNotes Recorder on macOS
 
-ForgeNotes Recorder is an internal tool. It is intentionally **ad-hoc signed** and is not
-notarized because the project does not use a paid Apple Developer membership. The build is
-cryptographically self-consistent, but Apple Gatekeeper cannot identify its publisher.
+ForgeNotes Recorder is signed with an Apple Developer ID certificate and notarized by
+Apple, so it installs like any other Mac app. There is no security warning to work
+around and no Terminal command to run.
 
 ## Install
 
-1. Download `ForgeNotes-Recorder.dmg` from the internal GitHub release.
+1. Download `ForgeNotes-Recorder.dmg` from the latest release.
 2. Open the DMG and drag **ForgeNotes Recorder** into **Applications**.
 3. Eject the DMG.
-4. Open Terminal and run:
+4. Open ForgeNotes Recorder from Applications and approve microphone access when asked.
 
-   ```sh
-   xattr -dr com.apple.quarantine "/Applications/ForgeNotes Recorder.app"
-   ```
+## Updates
 
-5. Open ForgeNotes Recorder from Applications and approve microphone access.
+The app checks for new versions in the background and downloads them automatically.
 
-The command removes only the quarantine attribute that macOS adds to downloaded files. Do not
-use `sudo`, disable Gatekeeper globally, or change any other security settings.
+An update is **never installed while the app is open**, because a restart in the middle
+of a meeting would destroy the recording. When a new version is ready the version badge
+in the header reads *"update ready"*; the update is applied the next time you quit, and
+the new version is what launches after that. Quitting and reopening applies it
+immediately if you would rather not wait.
 
-## Verify the internal build
+## Verify the build
 
-You can confirm that the app bundle has not been modified since it was packaged:
+You can confirm the app is genuinely signed and notarized:
 
 ```sh
-codesign --verify --deep --strict --verbose=2 "/Applications/ForgeNotes Recorder.app"
-lipo -archs "/Applications/ForgeNotes Recorder.app/Contents/MacOS/ForgeNotes Recorder"
+spctl --assess -vvv --type exec "/Applications/ForgeNotes Recorder.app"
 ```
 
-The first command must succeed. The second must print both `x86_64` and `arm64`.
+It must report `source=Notarized Developer ID`. To confirm which publisher signed it:
+
+```sh
+codesign -dv --verbose=4 "/Applications/ForgeNotes Recorder.app" 2>&1 | grep -E 'Authority|TeamIdentifier'
+```
+
+The team identifier is `X36AQ2X3XN`.
 
 ## Requirements
 
 - macOS 12 Monterey or newer
-- Apple Silicon or 64-bit Intel Mac
+- Apple Silicon or 64-bit Intel Mac (the build is universal)
 - BlackHole 2ch and a Multi-Output Device for capturing call audio

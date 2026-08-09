@@ -43,6 +43,7 @@ html, body {
 .brand strong { color: var(--text); }
 .brand-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent-strong); }
 .brand-ver { font-size: 11px; color: var(--muted-2); padding: 1px 6px; border: 1px solid var(--border); border-radius: 999px; }
+.brand-ver-update { color: var(--accent); border-color: var(--accent-strong); }
 
 .rec-indicator {
   display: flex;

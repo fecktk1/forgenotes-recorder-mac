@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Hardened Runtime is required for notarization, and it revokes capabilities that
+       Electron needs back explicitly. V8 compiles JavaScript at runtime, so without the
+       JIT entitlements the app is signed and notarized but crashes on launch. -->
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+  <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+  <true/>
+
+  <!-- Microphone. NSMicrophoneUsageDescription in Info.plist controls the wording of the
+       prompt; this entitlement is what actually permits capture under Hardened Runtime.
+       Without it the TCC prompt never appears and getUserMedia fails. Covers both the
+       mic and the BlackHole 2ch input used for call audio — macOS treats both as audio
+       input devices. -->
+  <key>com.apple.security.device.audio-input</key>
+  <true/>
+</dict>
+</plist>

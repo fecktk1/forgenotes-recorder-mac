@@ -1,6 +1,6 @@
 {
   "name": "forgenotes-recorder-mac",
-  "version": "0.6.2",
+  "version": "0.7.0",
   "private": true,
   "description": "ForgeNotes macOS recorder for online calls and single-microphone room recordings.",
   "main": "main.js",
@@ -8,11 +8,15 @@
     "start": "electron .",
     "verify": "node --check renderer/app.js && node --check main.js && node scripts/verify-capture-profile.mjs",
     "prepare:config": "node scripts/write-production-config.mjs",
-    "dist:mac": "npm run prepare:config && electron-builder --mac --universal --publish never && codesign --force --sign - release/ForgeNotes-Recorder.dmg && npm run verify:mac",
+    "dist:mac": "npm run prepare:config && electron-builder --mac --universal --publish never && npm run verify:mac",
+    "dist:mac:unsigned": "npm run prepare:config && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --universal --publish never -c.mac.identity=null -c.mac.hardenedRuntime=false -c.mac.notarize=false",
     "verify:mac": "bash scripts/verify-macos-build.sh release/ForgeNotes-Recorder.dmg"
   },
   "engines": {
     "node": ">=24 <25"
+  },
+  "dependencies": {
+    "electron-updater": "6.8.9"
   },
   "devDependencies": {
     "electron": "43.2.0",
@@ -21,14 +25,36 @@
   "build": {
     "appId": "io.thecontentforge.forgenotes.recorder.mac",
     "productName": "ForgeNotes Recorder",
-    "files": ["main.js", "preload.js", "renderer/**", "icon.png", "config.json", "config.example.json"],
-    "directories": { "output": "release" },
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer/**",
+      "icon.png",
+      "config.json",
+      "config.example.json",
+      "node_modules/**/*"
+    ],
+    "directories": {
+      "output": "release"
+    },
     "artifactName": "ForgeNotes-Recorder.${ext}",
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "fecktk1",
+        "repo": "forgenotes-recorder-mac"
+      }
+    ],
     "mac": {
-      "target": "dmg",
-      "identity": "-",
-      "hardenedRuntime": false,
-      "notarize": false,
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "identity": "joshua smoliak (X36AQ2X3XN)",
+      "hardenedRuntime": true,
+      "notarize": true,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.inherit.plist",
       "strictVerify": true,
       "minimumSystemVersion": "12.0",
       "category": "public.app-category.productivity",

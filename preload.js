@@ -18,6 +18,15 @@ contextBridge.exposeInMainWorld('desktop', {
   // Append a line to the upload diagnostics log (userData/upload-log.txt).
   appendLog: (line) => ipcRenderer.invoke('log:append', line),
 
+  // Auto-update status. Poll once on load, then listen — an update that finished
+  // downloading before the renderer was ready would otherwise be missed.
+  getUpdateState: () => ipcRenderer.invoke('update:state'),
+  onUpdateState: (cb) => {
+    const handler = (_e, state) => cb(state)
+    ipcRenderer.on('update:state', handler)
+    return () => ipcRenderer.removeListener('update:state', handler)
+  },
+
   // Local recording fallback / offline queue. Blobs cross IPC as ArrayBuffers.
   saveRecording: (localId, meta, segments) => ipcRenderer.invoke('rec:save', { localId, meta, segments }),
   listPending: () => ipcRenderer.invoke('rec:list'),

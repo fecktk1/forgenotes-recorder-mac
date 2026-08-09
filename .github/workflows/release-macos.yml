@@ -1,4 +1,4 @@
-name: Build macOS internal release
+name: Build macOS release
 
 on:
   workflow_dispatch:
@@ -16,7 +16,9 @@ concurrency:
 jobs:
   build:
     runs-on: macos-14
-    timeout-minutes: 45
+    # Notarization is a round trip to Apple and is usually minutes, but the queue can be
+    # slow enough to matter; the build itself is a few minutes of that.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
@@ -31,10 +33,48 @@ jobs:
 
       - run: npm ci
 
-      - name: Build and verify universal internal DMG
+      # Newer npm blocks package install scripts by default, so Electron's postinstall — the
+      # step that downloads the actual binary — can be skipped silently. The failure then
+      # surfaces much later as an unrelated-looking packaging error, so check for the binary
+      # and run the installer directly if it is missing.
+      - name: Ensure the Electron binary is installed
+        run: |
+          if [ ! -d node_modules/electron/dist ]; then
+            echo "electron/dist missing — running its install script directly"
+            node node_modules/electron/install.js
+          fi
+          test -d node_modules/electron/dist
+
+      # electron-builder reads the App Store Connect key from a file path, so the base64
+      # secret has to land on disk first. runner.temp is wiped when the job ends.
+      - name: Stage notarization key
+        run: echo "${{ secrets.APPLE_API_KEY_BASE64 }}" | base64 --decode > "${{ runner.temp }}/AuthKey.p8"
+
+      - name: Build, sign, notarize and verify universal DMG
         run: npm run dist:mac
         env:
           FORGENOTES_SUPABASE_ANON_KEY: ${{ secrets.FORGENOTES_SUPABASE_ANON_KEY }}
+          # Developer ID certificate. electron-builder imports this into a throwaway
+          # keychain for the job; CSC_LINK accepts base64 content directly.
+          CSC_LINK: ${{ secrets.MAC_CERT_P12_BASE64 }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CERT_P12_PASSWORD }}
+          # Notarization credentials.
+          APPLE_API_KEY: ${{ runner.temp }}/AuthKey.p8
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+      - name: Remove notarization key
+        if: always()
+        run: rm -f "${{ runner.temp }}/AuthKey.p8"
+
+      # Without latest-mac.yml every installed copy silently stops updating, and nothing
+      # else in the job would fail. Check for it explicitly.
+      - name: Confirm auto-update metadata was produced
+        run: |
+          test -f release/latest-mac.yml || { echo "latest-mac.yml missing — auto-update would break" >&2; exit 1; }
+          test -f release/ForgeNotes-Recorder.zip || { echo "zip missing — Squirrel.Mac cannot update from a DMG" >&2; exit 1; }
+          cat release/latest-mac.yml
 
       - name: Create checksum
         working-directory: release
@@ -46,16 +86,26 @@ jobs:
           path: |
             release/ForgeNotes-Recorder.dmg
             release/ForgeNotes-Recorder.dmg.sha256
+            release/ForgeNotes-Recorder.zip
+            release/latest-mac.yml
           if-no-files-found: error
 
       - name: Publish tagged release
         if: startsWith(github.ref, 'refs/tags/')
-        run: >-
-          gh release create "$GITHUB_REF_NAME"
-          release/ForgeNotes-Recorder.dmg
-          release/ForgeNotes-Recorder.dmg.sha256
-          --verify-tag
-          --title "$GITHUB_REF_NAME — internal macOS build"
-          --notes-file INTERNAL_INSTALL.md
+        # The zip and latest-mac.yml are what electron-updater reads; the DMG is only for
+        # humans doing a first install. Blockmaps make updates differential when present.
+        run: |
+          shopt -s nullglob
+          files=(
+            release/ForgeNotes-Recorder.dmg
+            release/ForgeNotes-Recorder.dmg.sha256
+            release/ForgeNotes-Recorder.zip
+            release/latest-mac.yml
+          )
+          files+=(release/*.blockmap)
+          gh release create "$GITHUB_REF_NAME" "${files[@]}" \
+            --verify-tag \
+            --title "$GITHUB_REF_NAME — macOS" \
+            --notes-file INTERNAL_INSTALL.md
         env:
           GH_TOKEN: ${{ github.token }}

@@ -6,6 +6,7 @@
 // getUserMedia in the renderer. Main stays the trusted shell: window, encrypted token
 // storage, and the local-recording (offline) queue.
 const { app, BrowserWindow, ipcMain, shell, safeStorage } = require('electron')
+const { autoUpdater } = require('electron-updater')
 const path = require('node:path')
 const fs = require('node:fs/promises')
 
@@ -136,7 +137,7 @@ ipcMain.handle('disk:free', async () => {
 const LOG_FILE = () => path.join(USER_DATA(), 'upload-log.txt')
 const LOG_MAX_BYTES = 512 * 1024
 
-ipcMain.handle('log:append', async (_e, line) => {
+async function appendLog(line) {
   try {
     const file = LOG_FILE()
     try {
@@ -150,7 +151,59 @@ ipcMain.handle('log:append', async (_e, line) => {
     // diagnostics only — never fail the caller
   }
   return true
-})
+}
+
+ipcMain.handle('log:append', async (_e, line) => appendLog(line))
+
+// ---------- auto-update ----------
+// Updates download quietly in the background and are applied the next time the user
+// quits. We deliberately never call quitAndInstall(): this app records live meetings,
+// and restarting mid-recording would destroy a capture that cannot be recreated.
+// autoInstallOnAppQuit swaps the app in on exit, so the next launch is the new version.
+const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000
+
+let updateState = { status: 'idle', version: null }
+
+function setUpdateState(status, version) {
+  updateState = { status, version: version ?? updateState.version }
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('update:state', updateState)
+}
+
+function initAutoUpdate() {
+  // An unpackaged run has no code signature for Squirrel to validate, and electron-updater
+  // throws instead of no-opping. Dev simply does not auto-update.
+  if (!app.isPackaged) return
+
+  autoUpdater.autoDownload = true
+  autoUpdater.autoInstallOnAppQuit = true
+  autoUpdater.logger = null
+
+  autoUpdater.on('checking-for-update', () => appendLog('update: checking'))
+  autoUpdater.on('update-available', (info) => {
+    setUpdateState('downloading', info?.version)
+    appendLog(`update: ${info?.version} available, downloading`)
+  })
+  autoUpdater.on('update-not-available', () => setUpdateState('idle'))
+  autoUpdater.on('update-downloaded', (info) => {
+    setUpdateState('ready', info?.version)
+    appendLog(`update: ${info?.version} downloaded, applies on next quit`)
+  })
+  autoUpdater.on('error', (err) => {
+    // A failed update must never be user-visible noise — the app still works on the
+    // current version, and the next check retries.
+    setUpdateState('idle')
+    appendLog(`update: error ${err?.message || err}`)
+  })
+
+  const check = () => {
+    autoUpdater.checkForUpdates().catch((e) => appendLog(`update: check failed ${e?.message || e}`))
+  }
+  setTimeout(check, 10_000) // let the window settle and the network come up first
+  setInterval(check, UPDATE_CHECK_INTERVAL_MS)
+}
+
+// The renderer loads after the first events may already have fired, so let it ask.
+ipcMain.handle('update:state', async () => updateState)
 
 // ---------- IPC: local recording fallback / offline queue ----------
 function safeId(id) {
@@ -219,6 +272,7 @@ ipcMain.handle('rec:delete', async (_e, localId) => {
 // ---------- lifecycle ----------
 app.whenReady().then(() => {
   createWindow()
+  initAutoUpdate()
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })

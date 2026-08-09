@@ -22,6 +22,7 @@ async function boot() {
   CFG = await window.desktop.getConfig()
   const verEl = $('app-version')
   if (verEl && CFG.version) verEl.textContent = `v${CFG.version}`
+  wireUpdateBadge(verEl)
   if (CFG._parseError || !CFG.supabaseUrl || !CFG.supabaseAnonKey) {
     if (CFG._parseError) {
       const detail = document.querySelector('#config-error p')
@@ -45,6 +46,22 @@ async function boot() {
     show('login-view')
   }
   await refreshPending()
+}
+
+// Updates install on quit, never mid-session, so the badge is the only signal a user
+// gets that a newer build is already staged. Deliberately passive — nothing to click,
+// nothing that could interrupt a recording in progress.
+function wireUpdateBadge(verEl) {
+  if (!verEl || !window.desktop.onUpdateState) return
+  const render = (state) => {
+    if (state?.status !== 'ready') return
+    verEl.textContent = `v${CFG.version} · update ready`
+    verEl.classList.add('brand-ver-update')
+    verEl.title = `Version ${state.version} has been downloaded and installs the next time you quit ForgeNotes Recorder.`
+  }
+  // Poll once as well as subscribe: the download can finish before this view loads.
+  window.desktop.getUpdateState().then(render).catch(() => {})
+  window.desktop.onUpdateState(render)
 }
 
 // ---------------------------------------------------------------- auth (GoTrue REST)

@@ -1,9 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Verifies that a release DMG is something Gatekeeper will actually open on a machine
+# that has never seen it before. Signing alone is not enough: an app can carry a valid
+# Developer ID signature and still be blocked because it was never notarized, or because
+# the notarization ticket was not stapled and the user is offline on first launch. Each
+# check below maps to a distinct way that can go wrong.
+
 dmg_path="${1:-release/ForgeNotes-Recorder.dmg}"
 app_name="ForgeNotes Recorder.app"
 expected_bundle_id="io.thecontentforge.forgenotes.recorder.mac"
+expected_team_id="${FORGENOTES_TEAM_ID:-X36AQ2X3XN}"
 
 if [[ ! -f "$dmg_path" ]]; then
   echo "Missing DMG: $dmg_path" >&2
@@ -12,6 +19,11 @@ fi
 
 hdiutil verify "$dmg_path"
 codesign --verify --strict --verbose=2 "$dmg_path"
+
+# The DMG itself is signed and stapled, so the very first double-click is clean even
+# with no network. Without this, a first-launch-offline user still sees a warning.
+xcrun stapler validate "$dmg_path"
+spctl --assess -vvv --type open --context context:primary-signature "$dmg_path"
 
 mount_dir="$(mktemp -d "${TMPDIR:-/tmp}/forgenotes-verify.XXXXXX")"
 cleanup() {
@@ -31,10 +43,42 @@ fi
 codesign --verify --deep --strict --verbose=2 "$app_path"
 
 signature_details="$(codesign -d --verbose=4 "$app_path" 2>&1)"
-if ! grep -q '^Signature=adhoc$' <<<"$signature_details"; then
-  echo "Expected an intentional ad-hoc app signature." >&2
+
+if grep -q '^Signature=adhoc$' <<<"$signature_details"; then
+  echo "App is ad-hoc signed — Gatekeeper cannot identify the publisher." >&2
   exit 1
 fi
+
+if ! grep -q "^Authority=Developer ID Application: .*(${expected_team_id})$" <<<"$signature_details"; then
+  echo "App is not signed by the expected Developer ID Application certificate:" >&2
+  grep '^Authority=' <<<"$signature_details" >&2 || echo "  (no Authority line at all)" >&2
+  exit 1
+fi
+
+if ! grep -q "^TeamIdentifier=${expected_team_id}$" <<<"$signature_details"; then
+  echo "Unexpected TeamIdentifier (wanted ${expected_team_id}):" >&2
+  grep '^TeamIdentifier=' <<<"$signature_details" >&2
+  exit 1
+fi
+
+# Notarization is rejected outright without Hardened Runtime, so a build that lost this
+# flag would fail much later and much more confusingly.
+if ! grep -q 'flags=.*runtime' <<<"$signature_details"; then
+  echo "App is not built with Hardened Runtime." >&2
+  grep '^CodeDirectory' <<<"$signature_details" >&2
+  exit 1
+fi
+
+# The real question: does this machine's Gatekeeper accept it? Prints
+# "source=Notarized Developer ID" when the app is both signed and notarized.
+assessment="$(spctl --assess -vvv --type exec "$app_path" 2>&1)"
+echo "$assessment"
+if ! grep -q 'source=Notarized Developer ID' <<<"$assessment"; then
+  echo "Gatekeeper did not report a notarized Developer ID app." >&2
+  exit 1
+fi
+
+xcrun stapler validate "$app_path"
 
 bundle_id="$(plutil -extract CFBundleIdentifier raw -o - "$app_path/Contents/Info.plist")"
 if [[ "$bundle_id" != "$expected_bundle_id" ]]; then
@@ -66,5 +110,7 @@ if [[ "$mach_count" -eq 0 ]]; then
   exit 1
 fi
 
-echo "Verified valid ad-hoc signatures and universal arm64/x86_64 binaries ($mach_count Mach-O files)."
-echo "Gatekeeper trust is intentionally unavailable; internal users must remove quarantine after copying the app."
+echo
+echo "Verified: notarized Developer ID signature (team ${expected_team_id}), Hardened Runtime,"
+echo "stapled ticket on both DMG and app, universal arm64/x86_64 ($mach_count Mach-O files)."
+echo "This build opens on a clean Mac with no quarantine workaround."

@@ -14,19 +14,14 @@ than ScreenCaptureKit, so it does not request screen-recording permission.
 - Node.js 24 for development and release builds
 - BlackHole 2ch for capturing meeting audio
 
-## Internal installation
+## Installation
 
-The distributed DMG is intentionally ad-hoc signed and not notarized. That keeps the app free for
-internal use, but macOS cannot establish publisher trust without an Apple Developer membership.
-After copying the app to Applications, an internal user must remove the quarantine attribute once:
+The distributed DMG is signed with a Developer ID Application certificate (team
+`X36AQ2X3XN`) and notarized by Apple, so it opens normally: drag to Applications and
+launch. No quarantine command, no right-click → Open. See
+[INTERNAL_INSTALL.md](INTERNAL_INSTALL.md) for installation and verification steps.
 
-```sh
-xattr -dr com.apple.quarantine "/Applications/ForgeNotes Recorder.app"
-```
-
-Do not disable Gatekeeper globally or use `sudo`. See [INTERNAL_INSTALL.md](INTERNAL_INSTALL.md)
-for the complete installation and verification steps. Right-click → Open is not a dependable
-workaround for an unnotarized Electron bundle.
+Installed copies update themselves — see [Updates](#updates).
 
 ## Recording setups
 
@@ -75,24 +70,51 @@ npm ci
 npm run dist:mac
 ```
 
-This produces `release/ForgeNotes-Recorder.dmg` as a universal `arm64` + `x86_64` application.
-The build command:
+This produces a universal `arm64` + `x86_64` application as `release/ForgeNotes-Recorder.dmg`
+(for people installing by hand) and `release/ForgeNotes-Recorder.zip` plus
+`release/latest-mac.yml` (which is what the auto-updater reads — Squirrel.Mac cannot update
+from a DMG). The build command:
 
 1. validates that the configured Supabase JWT has the `anon` role;
-2. packages and ad-hoc signs every Electron executable;
-3. ad-hoc signs the outer DMG;
-4. mounts the DMG read-only and runs strict signature, bundle-ID, and architecture checks.
+2. packages and signs every Electron executable with the Developer ID certificate under
+   Hardened Runtime;
+3. submits the app to Apple for notarization, then staples the ticket to the app and the DMG
+   so a first launch works offline;
+4. mounts the DMG read-only and asserts signature authority, team ID, Hardened Runtime,
+   Gatekeeper acceptance, bundle ID, and universal architectures.
 
-Ad-hoc signing is selected deliberately with `mac.identity: "-"` and hardened runtime is disabled,
-as recommended by electron-builder for unsigned internal distribution. It removes the malformed
-signature that caused the old “damaged” installer, but it does **not** create Gatekeeper trust.
+Signing needs the Developer ID certificate in your keychain. Notarization additionally needs
+`APPLE_API_KEY` (path to the App Store Connect `.p8`), `APPLE_API_KEY_ID`, `APPLE_API_ISSUER`,
+and `APPLE_TEAM_ID` in the environment. Without a certificate, use `npm run dist:mac:unsigned`
+for a local development build — it will not be trusted by Gatekeeper and must not be shipped.
+
+## Updates
+
+Installed copies check GitHub Releases in the background and download new versions
+automatically. Updates are applied on quit and never mid-session: restarting during a
+recording would destroy an unrecoverable capture. The version badge shows "update ready"
+once a new build is staged.
+
+This means a release is only complete if `ForgeNotes-Recorder.zip` and `latest-mac.yml` are
+attached to it. The release workflow fails the build if either is missing.
 
 ## GitHub release workflow
 
-Add the repository secret `FORGENOTES_SUPABASE_ANON_KEY`, containing only the public Supabase anon
-JWT. The macOS workflow can then be run manually to produce a verified artifact. Pushing a matching
-version tag (for example `v0.5.0`) also creates the GitHub release with a stable
-`ForgeNotes-Recorder.dmg` asset and SHA-256 checksum.
+Repository secrets required:
+
+| Secret | Contents |
+| --- | --- |
+| `FORGENOTES_SUPABASE_ANON_KEY` | The public Supabase anon JWT |
+| `MAC_CERT_P12_BASE64` | Developer ID certificate + private key, exported as `.p12`, base64-encoded |
+| `MAC_CERT_P12_PASSWORD` | Password used when exporting that `.p12` |
+| `APPLE_API_KEY_BASE64` | App Store Connect `.p8` key, base64-encoded |
+| `APPLE_API_KEY_ID` | Key ID of that key |
+| `APPLE_API_ISSUER` | Issuer ID (one per team, not per key) |
+| `APPLE_TEAM_ID` | `X36AQ2X3XN` |
+
+The workflow can be run manually to produce a verified artifact. Pushing a matching version
+tag (for example `v0.7.0`) creates the GitHub release with the DMG, its SHA-256 checksum, and
+the auto-update assets.
 
 Long recordings remain segmented privately for reliable upload and processing. ForgeNotes creates
 one continuous playback asset after upload; the segments are not presented to users.
@@ -100,6 +122,5 @@ one continuous playback asset after upload; the segments are not presented to us
 ## Current limitations
 
 - Call audio requires BlackHole and Multi-Output routing.
-- The app is an internal build, so every freshly downloaded copy needs the one-time quarantine
-  removal step.
-- The app does not currently perform automatic updates; install new internal releases manually.
+- Updates apply on quit rather than immediately, so a user who never quits the app stays on
+  the version they launched.
