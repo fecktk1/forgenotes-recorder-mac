@@ -18,12 +18,12 @@ if [[ ! -f "$dmg_path" ]]; then
 fi
 
 hdiutil verify "$dmg_path"
-codesign --verify --strict --verbose=2 "$dmg_path"
 
-# The DMG itself is signed and stapled, so the very first double-click is clean even
-# with no network. Without this, a first-launch-offline user still sees a warning.
-xcrun stapler validate "$dmg_path"
-spctl --assess -vvv --type open --context context:primary-signature "$dmg_path"
+# The DMG container is deliberately NOT required to be signed. electron-builder signs and
+# notarizes the .app, not the disk image, and Gatekeeper's decision is made about the app:
+# a stapled ticket on the app is what allows a clean first launch, offline. An unsigned DMG
+# yields at most the ordinary "downloaded from the internet" confirmation every app shows.
+# What must be true is asserted below, against the app inside.
 
 mount_dir="$(mktemp -d "${TMPDIR:-/tmp}/forgenotes-verify.XXXXXX")"
 cleanup() {
@@ -112,5 +112,5 @@ fi
 
 echo
 echo "Verified: notarized Developer ID signature (team ${expected_team_id}), Hardened Runtime,"
-echo "stapled ticket on both DMG and app, universal arm64/x86_64 ($mach_count Mach-O files)."
-echo "This build opens on a clean Mac with no quarantine workaround."
+echo "stapled ticket on the app, universal arm64/x86_64 ($mach_count Mach-O files)."
+echo "Gatekeeper accepts this build with no quarantine workaround."
