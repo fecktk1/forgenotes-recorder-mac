@@ -1,6 +1,6 @@
 {
   "name": "forgenotes-recorder-mac",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "private": true,
   "description": "ForgeNotes macOS recorder for online calls and single-microphone room recordings.",
   "main": "main.js",
