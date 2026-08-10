@@ -214,3 +214,19 @@ html, body {
 .cap.bad { color: var(--warn); font-weight: 600; }
 .meter { height: 10px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
 .meter-fill { height: 100%; width: 0%; background: linear-gradient(90deg, var(--ok), var(--accent-strong)); transition: width 0.06s linear; }
+
+
+/* ── Live captions ─────────────────────────────────────────────────────────── */
+.live-panel { position: relative; border: 1px solid var(--border, #333); border-radius: 10px; padding: 10px 12px; background: rgba(255,255,255,0.02); }
+.live-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.live-title { font-size: 10px; letter-spacing: 0.8px; font-weight: 700; color: #9a9a9a; }
+.live-badge { font-size: 10px; border: 1px solid #444; border-radius: 999px; padding: 1px 7px; color: #bbb; }
+.live-state { font-size: 11px; color: #8a8a8a; margin-left: auto; }
+.live-scroll { max-height: 132px; overflow-y: auto; }
+.live-text { font-size: 12.5px; line-height: 1.5; color: #d6d6d6; margin: 0; white-space: pre-wrap; }
+.live-latest { position: absolute; right: 12px; bottom: 34px; border: 0; border-radius: 999px; background: #e6b04b; color: #111; font-size: 11px; font-weight: 700; padding: 4px 10px; cursor: pointer; }
+.hint-inline { font-style: normal; color: #777; font-weight: 400; }
+
+/* ── First-run hint ────────────────────────────────────────────────────────── */
+.first-run { display: flex; align-items: flex-start; gap: 10px; border: 1px solid rgba(230,176,75,0.35); background: rgba(230,176,75,0.07); border-radius: 10px; padding: 10px 12px; }
+.first-run p { margin: 0; font-size: 12px; line-height: 1.5; color: #cfcfcf; }

@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src https:; style-src 'self' 'unsafe-inline'; img-src 'self' data:;" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; connect-src https:; style-src 'self' 'unsafe-inline'; img-src 'self' data:;" />
     <title>ForgeNotes Recorder</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
@@ -93,6 +93,14 @@
             </select>
           </label>
 
+          <div id="first-run" class="first-run hidden">
+            <p><strong>First time?</strong> Pick <em>Online call</em> to capture both sides of a
+            meeting (via BlackHole) or <em>In person</em> for the room mic. Recordings upload when
+            you stop, become transcripts and notes in a few minutes, and live in the same library
+            as your iPhone and web captures.</p>
+            <button id="first-run-dismiss" class="btn ghost small" type="button">Got it</button>
+          </div>
+
           <div class="field">
             <span>Recording setup</span>
             <div class="mode-toggle" role="group" aria-label="Recording setup">
@@ -126,6 +134,11 @@
               </select>
             </label>
           </div>
+
+          <label class="field">
+            <span>Tags <em class="hint-inline">comma, separated (optional)</em></span>
+            <input id="tags" type="text" placeholder="board, q3, customer" />
+          </label>
 
           <label class="field">
             <span id="mic-label">Microphone</span>
@@ -174,6 +187,20 @@
             </div>
           </div>
 
+          <div id="live-panel" class="live-panel hidden">
+            <div class="live-head">
+              <span class="live-title">LIVE CAPTIONS</span>
+              <span class="live-badge">on-device</span>
+              <span id="live-state" class="live-state"></span>
+              <button id="live-toggle" class="btn ghost small" type="button">Turn off</button>
+            </div>
+            <div id="live-scroll" class="live-scroll">
+              <p id="live-text" class="live-text"></p>
+            </div>
+            <button id="live-latest" class="live-latest hidden" type="button">↓ Latest</button>
+            <p class="hint">Preview only — the full transcript is prepared after upload. Speech never leaves this machine.</p>
+          </div>
+
           <p id="status" class="msg hidden"></p>
           <a id="open-link" class="btn link hidden" href="#">Open in ForgeNotes →</a>
         </div>
@@ -188,5 +215,6 @@
     </main>
 
     <script src="app.js"></script>
+      <script type="module" src="transcriber.js"></script>
   </body>
 </html>

@@ -500,6 +500,7 @@ async function startRecording() {
       capture_profile: profile,
       visibility: $('visibility').value,
       template_key: $('template').value,
+      tags: $('tags').value,
     },
     mic: null,
     system: null,
@@ -527,6 +528,8 @@ async function startRecording() {
   }
   rec.meters = setupMeters(micStream, systemStream)
   show('meters')
+  // Fire-and-forget: captions must never delay or endanger the recording.
+  if (window.fnLive) window.fnLive.start({ micStream, systemStream })
 
   $('start-btn').classList.add('hidden')
   $('pause-btn').classList.remove('hidden')
@@ -544,12 +547,14 @@ function togglePause() {
     recorders.forEach((r) => { if (r.state === 'recording') r.pause() })
     rec.paused = true
     rec.pauseStart = Date.now()
+    if (window.fnLive) window.fnLive.setPaused(true)
     $('pause-btn').textContent = 'Resume'
     $('rec-indicator').classList.add('hidden')
   } else {
     recorders.forEach((r) => { if (r.state === 'paused') r.resume() })
     rec.pausedMs += Date.now() - rec.pauseStart
     rec.paused = false
+    if (window.fnLive) window.fnLive.setPaused(false)
     $('pause-btn').textContent = 'Pause'
     show('rec-indicator')
   }
@@ -575,6 +580,7 @@ function updateTimer() {
 async function stopRecording() {
   if (!rec || rec.stopping) return
   rec.stopping = true
+  if (window.fnLive) window.fnLive.stop()
   clearInterval(rec.rotateTimer)
   clearInterval(rec.timer)
   if (rec.meters) rec.meters.stop()
@@ -729,6 +735,19 @@ function showUploaded(sessionId, message) {
   }
 }
 
+function parseTags(raw) {
+  const seen = new Set()
+  const tags = []
+  for (const piece of String(raw || '').split(',')) {
+    const tag = piece.trim().replace(/\s+/g, ' ').slice(0, 48)
+    if (!tag || seen.has(tag.toLowerCase())) continue
+    seen.add(tag.toLowerCase())
+    tags.push(tag)
+    if (tags.length >= 20) break
+  }
+  return tags
+}
+
 async function uploadSegments(localId, meta, seqd) {
   if (activeUploads.has(localId)) {
     setStatus('This recording is already uploading — hang tight.', 'warn')
@@ -742,7 +761,9 @@ async function uploadSegments(localId, meta, seqd) {
       source_type: meta.source_type || 'other',
       capture_profile: meta.capture_profile || (meta.source_type === 'in_person' ? 'room_single_mic' : 'remote_dual_track'),
       visibility: meta.visibility || 'private',
-      tags: [],
+      // Comma-separated in the field, deduplicated case-insensitively, capped like every
+      // other client. Hardcoded [] was the desktop's last dead capture option.
+      tags: parseTags(meta.tags),
       // Stable per-recording ref: a retry reattaches to the SAME server session and
       // skips chunks the server already has, instead of re-uploading everything into
       // a fresh duplicate session.
@@ -797,6 +818,13 @@ async function uploadSegments(localId, meta, seqd) {
     showUploaded(sessionId, 'Uploaded. ForgeNotes is transcribing it now.')
     $('title').value = ''
   } catch (e) {
+    if (e && e.httpStatus === 402) {
+      // Quota, not breakage. The audio is safe locally and uploads cleanly next period.
+      setStatus("You've used this month's recording hours. This recording is saved on this " +
+        'device — retry after your quota resets, or upgrade in the iPhone app.', 'warn')
+      await refreshPending()
+      return
+    }
     setStatus(`Upload failed — saved on this device, retry below. (${e.message})`, 'error')
     await diag(`upload run failed for ${localId}: ${e.message}${e.httpStatus ? ` (HTTP ${e.httpStatus})` : ''}`)
   } finally {
@@ -968,3 +996,76 @@ function wireEvents() {
 }
 
 boot()
+
+
+// ── Live captions panel ──────────────────────────────────────────────────────
+// The engine lives in transcriber.js (a module); this owns only pixels. Follow-the-tail
+// scrolling yields to the user's wheel and resumes from the Latest pill — reading what was
+// said two minutes ago is exactly what the panel is for.
+let liveFollowing = true
+
+function liveSetState(text) { $('live-state').textContent = text }
+
+window.addEventListener('fn-live', (event) => {
+  const d = event.detail || {}
+  const panel = $('live-panel')
+  if (d.type === 'ready') {
+    $('live-toggle').textContent = window.fnLive.enabled() ? 'Turn off' : 'Turn on'
+    return
+  }
+  if (d.type === 'enabled') {
+    $('live-toggle').textContent = d.enabled ? 'Turn off' : 'Turn on'
+    if (!d.enabled) panel.classList.add('hidden')
+    return
+  }
+  if (d.type === 'progress') {
+    panel.classList.remove('hidden')
+    liveSetState(`downloading model… ${d.progress}%`)
+    return
+  }
+  if (d.type === 'state') {
+    if (d.state === 'idle') { panel.classList.add('hidden'); return }
+    panel.classList.remove('hidden')
+    if (d.state === 'loading') liveSetState('loading model…')
+    else if (d.state === 'listening') liveSetState('listening')
+    else if (d.state === 'paused') liveSetState('paused')
+    else if (d.state === 'unsupported') { liveSetState('unavailable on this machine'); $('live-text').textContent = 'Live captions need WebGPU, which this machine does not offer. Recording is unaffected.' }
+    else if (d.state === 'failed') { liveSetState('stopped'); if (d.message) $('live-text').textContent = d.message }
+    return
+  }
+  if (d.type === 'text') {
+    panel.classList.remove('hidden')
+    $('live-text').textContent = d.text
+    if (liveFollowing) {
+      const scroller = $('live-scroll')
+      scroller.scrollTop = scroller.scrollHeight
+    }
+  }
+})
+
+$('live-scroll').addEventListener('scroll', () => {
+  const el = $('live-scroll')
+  const nearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 24
+  liveFollowing = nearBottom
+  $('live-latest').classList.toggle('hidden', nearBottom)
+})
+
+$('live-latest').addEventListener('click', () => {
+  liveFollowing = true
+  const el = $('live-scroll')
+  el.scrollTop = el.scrollHeight
+  $('live-latest').classList.add('hidden')
+})
+
+$('live-toggle').addEventListener('click', () => {
+  window.fnLive.setEnabled(!window.fnLive.enabled())
+})
+
+// ── First-run hint ───────────────────────────────────────────────────────────
+try {
+  if (!localStorage.getItem('fn_seen_intro')) $('first-run').classList.remove('hidden')
+} catch { /* private mode */ }
+$('first-run-dismiss').addEventListener('click', () => {
+  try { localStorage.setItem('fn_seen_intro', '1') } catch { /* private mode */ }
+  $('first-run').classList.add('hidden')
+})
