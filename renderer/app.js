@@ -725,7 +725,8 @@ async function uploadSegmentWithRetry(sessionId, s, sha) {
 }
 
 function showUploaded(sessionId, message) {
-  const url = `${CFG.forgenotesHost}/notes/m/${sessionId}`
+  // Land on the Notes tab — the forged-notes document — matching the iPhone app.
+  const url = `${CFG.forgenotesHost}/notes/m/${sessionId}?tab=notes`
   setStatus(message, 'ok')
   const link = $('open-link')
   link.classList.remove('hidden')
