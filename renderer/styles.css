@@ -3,12 +3,12 @@
   --panel: #18181b;
   --panel-2: #0c0c0e;
   --border: #27272a;
-  --border-focus: #67e8f9;
+  --border-focus: #efc068;
   --text: #f4f4f5;
   --muted: #a1a1aa;
   --muted-2: #71717a;
-  --accent: #a5f3fc;
-  --accent-strong: #67e8f9;
+  --accent: #f5dfa1;
+  --accent-strong: #efc068;
   --danger: #f87171;
   --danger-bg: rgba(248, 113, 113, 0.1);
   --warn: #fbbf24;
@@ -107,7 +107,7 @@ html, body {
   font-weight: 600;
   cursor: pointer;
 }
-.mode-option.active { border-color: var(--accent-strong); background: rgba(103, 232, 249, 0.1); color: var(--accent); }
+.mode-option.active { border-color: var(--accent-strong); background: rgba(239, 192, 104, 0.12); color: var(--accent); }
 #system-audio-fields { display: flex; flex-direction: column; gap: 10px; }
 
 .checkbox { display: flex; align-items: center; gap: 9px; color: var(--muted); font-size: 13px; cursor: pointer; }
