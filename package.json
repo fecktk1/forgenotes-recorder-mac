@@ -33,7 +33,10 @@
       "icon.png",
       "config.json",
       "config.example.json",
-      "node_modules/**/*"
+      "node_modules/**/*",
+      "!node_modules/@img/**",
+      "!node_modules/sharp/**",
+      "!node_modules/onnxruntime-node/**"
     ],
     "directories": {
       "output": "release"
