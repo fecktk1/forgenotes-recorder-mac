@@ -100,12 +100,23 @@ jobs:
             release/latest-mac.yml
           if-no-files-found: error
 
-      - name: Publish tagged release
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
         # The zip and latest-mac.yml are what electron-updater reads; the DMG is only for
         # humans doing a first install. Blockmaps make updates differential when present.
+        # Tag push: publish exactly that tag (--verify-tag, unchanged behavior). Manual
+        # dispatch: publish v<package.json version> and let gh mint the tag at this
+        # commit via --target — so releases can be cut from environments that can push
+        # branches but not tags.
         run: |
           shopt -s nullglob
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            TAG="$GITHUB_REF_NAME"
+            EXTRA=(--verify-tag)
+          else
+            TAG="v$(node -p "require('./package.json').version")"
+            EXTRA=(--target "$GITHUB_SHA")
+          fi
           files=(
             release/ForgeNotes-Recorder.dmg
             release/ForgeNotes-Recorder.dmg.sha256
@@ -113,9 +124,9 @@ jobs:
             release/latest-mac.yml
           )
           files+=(release/*.blockmap)
-          gh release create "$GITHUB_REF_NAME" "${files[@]}" \
-            --verify-tag \
-            --title "$GITHUB_REF_NAME — macOS" \
+          gh release create "$TAG" "${files[@]}" \
+            "${EXTRA[@]}" \
+            --title "$TAG — macOS" \
             --notes-file INTERNAL_INSTALL.md
         env:
           GH_TOKEN: ${{ github.token }}
