@@ -18,10 +18,10 @@ than ScreenCaptureKit, so it does not request screen-recording permission.
 
 The distributed DMG is signed with a Developer ID Application certificate (team
 `X36AQ2X3XN`) and notarized by Apple, so it opens normally: drag to Applications and
-launch. No quarantine command, no right-click → Open. See
+launch. No quarantine command, no right-click â†’ Open. See
 [INTERNAL_INSTALL.md](INTERNAL_INSTALL.md) for installation and verification steps.
 
-Installed copies update themselves — see [Updates](#updates).
+Installed copies update themselves â€” see [Updates](#updates).
 
 ## Recording setups
 
@@ -56,8 +56,7 @@ cp config.example.json config.json
 npm start
 ```
 
-Authentication is retained through Electron `safeStorage`. Recordings are written to disk before
-upload; failed uploads remain in **Pending uploads** until retried or discarded.
+Authentication is retained through Electron `safeStorage`. Use **Record locally** without signing in. **Stop & save** keeps audio on this device; the local library offers playback, folder access and optional **Upload & transcribe**. Auto-upload is opt-in. Successful uploads retain local copies until you discard them. Completed one-minute segments are checkpointed during capture; a crash can lose the current segment and an in-flight disk write.
 
 ## Reproducible internal build
 
@@ -72,7 +71,7 @@ npm run dist:mac
 
 This produces a universal `arm64` + `x86_64` application as `release/ForgeNotes-Recorder.dmg`
 (for people installing by hand) and `release/ForgeNotes-Recorder.zip` plus
-`release/latest-mac.yml` (which is what the auto-updater reads — Squirrel.Mac cannot update
+`release/latest-mac.yml` (which is what the auto-updater reads â€” Squirrel.Mac cannot update
 from a DMG). The build command:
 
 1. validates that the configured Supabase JWT has the `anon` role;
@@ -86,7 +85,7 @@ from a DMG). The build command:
 Signing needs the Developer ID certificate in your keychain. Notarization additionally needs
 `APPLE_API_KEY` (path to the App Store Connect `.p8`), `APPLE_API_KEY_ID`, `APPLE_API_ISSUER`,
 and `APPLE_TEAM_ID` in the environment. Without a certificate, use `npm run dist:mac:unsigned`
-for a local development build — it will not be trusted by Gatekeeper and must not be shipped.
+for a local development build â€” it will not be trusted by Gatekeeper and must not be shipped.
 
 ## Updates
 
@@ -112,8 +111,8 @@ Repository secrets required:
 | `APPLE_API_ISSUER` | Issuer ID (one per team, not per key) |
 | `APPLE_TEAM_ID` | `X36AQ2X3XN` |
 
-The workflow can be run manually to produce a verified artifact. Pushing a matching version
-tag (for example `v0.7.0`) creates the GitHub release with the DMG, its SHA-256 checksum, and
+Manual workflow dispatch publishes a release as well as building it. Pushing a matching version
+tag (for example `v0.10.0`) also creates the GitHub release with the DMG, its SHA-256 checksum, and
 the auto-update assets.
 
 Long recordings remain segmented privately for reliable upload and processing. ForgeNotes creates
@@ -124,3 +123,5 @@ one continuous playback asset after upload; the segments are not presented to us
 - Call audio requires BlackHole and Multi-Output routing.
 - Updates apply on quit rather than immediately, so a user who never quits the app stays on
   the version they launched.
+
+See [RELEASE.md](RELEASE.md) for the macOS 0.10.0 signing, notarization and distribution steps.
