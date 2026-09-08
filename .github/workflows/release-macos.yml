@@ -2,6 +2,11 @@ name: Build macOS release
 
 on:
   workflow_dispatch:
+    inputs:
+      draft:
+        description: Keep release out of automatic updates pending physical capture QA
+        type: boolean
+        default: true
   push:
     tags:
       - 'v*'
@@ -49,6 +54,11 @@ jobs:
             node node_modules/electron/install.js
           fi
           test -d node_modules/electron/dist
+
+      - name: Audit dependencies and verify Electron media runtime
+        run: |
+          npm audit --audit-level=low
+          npm run test:media-runtime
 
       # Both signing secrets are decoded to files rather than passed as base64 strings.
       # CSC_LINK does accept inline base64, but macOS `base64` wraps its output at 76
@@ -129,9 +139,11 @@ jobs:
             release/latest-mac.yml
           )
           files+=(release/*.blockmap)
+          if [[ "$RELEASE_DRAFT" == "true" ]]; then EXTRA+=(--draft); fi
           gh release create "$TAG" "${files[@]}" \
             "${EXTRA[@]}" \
             --title "$TAG — macOS" \
             --notes-file INTERNAL_INSTALL.md
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_DRAFT: ${{ github.event_name == 'workflow_dispatch' && inputs.draft }}
