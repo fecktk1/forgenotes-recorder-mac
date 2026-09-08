@@ -38,21 +38,21 @@ jobs:
           npm run verify
           npm test
 
-      # Newer npm blocks package install scripts by default, so Electron's postinstall â€” the
-      # step that downloads the actual binary â€” can be skipped silently. The failure then
+      # Newer npm blocks package install scripts by default, so Electron's postinstall — the
+      # step that downloads the actual binary — can be skipped silently. The failure then
       # surfaces much later as an unrelated-looking packaging error, so check for the binary
       # and run the installer directly if it is missing.
       - name: Ensure the Electron binary is installed
         run: |
           if [ ! -d node_modules/electron/dist ]; then
-            echo "electron/dist missing â€” running its install script directly"
+            echo "electron/dist missing — running its install script directly"
             node node_modules/electron/install.js
           fi
           test -d node_modules/electron/dist
 
       # Both signing secrets are decoded to files rather than passed as base64 strings.
       # CSC_LINK does accept inline base64, but macOS `base64` wraps its output at 76
-      # columns, and a wrapped value stops looking like base64 to electron-builder â€” which
+      # columns, and a wrapped value stops looking like base64 to electron-builder — which
       # then treats it as a FILE PATH and fails with "<secret> doesn't exist", masked in the
       # log so the real cause is invisible. Decoding here tolerates wrapped or unwrapped
       # input. runner.temp is wiped when the job ends.
@@ -87,8 +87,8 @@ jobs:
       # else in the job would fail. Check for it explicitly.
       - name: Confirm auto-update metadata was produced
         run: |
-          test -f release/latest-mac.yml || { echo "latest-mac.yml missing â€” auto-update would break" >&2; exit 1; }
-          test -f release/ForgeNotes-Recorder.zip || { echo "zip missing â€” Squirrel.Mac cannot update from a DMG" >&2; exit 1; }
+          test -f release/latest-mac.yml || { echo "latest-mac.yml missing — auto-update would break" >&2; exit 1; }
+          test -f release/ForgeNotes-Recorder.zip || { echo "zip missing — Squirrel.Mac cannot update from a DMG" >&2; exit 1; }
           cat release/latest-mac.yml
 
       - name: Create checksum
@@ -111,7 +111,7 @@ jobs:
         # humans doing a first install. Blockmaps make updates differential when present.
         # Tag push: publish exactly that tag (--verify-tag, unchanged behavior). Manual
         # dispatch: publish v<package.json version> and let gh mint the tag at this
-        # commit via --target â€” so releases can be cut from environments that can push
+        # commit via --target — so releases can be cut from environments that can push
         # branches but not tags.
         run: |
           shopt -s nullglob
@@ -131,7 +131,7 @@ jobs:
           files+=(release/*.blockmap)
           gh release create "$TAG" "${files[@]}" \
             "${EXTRA[@]}" \
-            --title "$TAG â€” macOS" \
+            --title "$TAG — macOS" \
             --notes-file INTERNAL_INSTALL.md
         env:
           GH_TOKEN: ${{ github.token }}
