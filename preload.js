@@ -29,6 +29,12 @@ contextBridge.exposeInMainWorld('desktop', {
 
   // Local recording fallback / offline queue. Blobs cross IPC as ArrayBuffers.
   saveRecording: (localId, meta, segments) => ipcRenderer.invoke('rec:save', { localId, meta, segments }),
+  checkpoint: (localId, meta, segment) => ipcRenderer.invoke('rec:checkpoint', { localId, meta, segment }),
+  finishRecording: (localId) => ipcRenderer.invoke('rec:finish', localId),
+  markUploaded: (localId, sessionId) => ipcRenderer.invoke('rec:uploaded', { localId, sessionId }),
+  readSegment: (localId, segment) => ipcRenderer.invoke('rec:segment', { localId, segment }),
+  playback: (localId) => ipcRenderer.invoke('rec:playback', localId),
+  openRecordingFolder: (localId) => ipcRenderer.invoke('rec:folder', localId),
   listPending: () => ipcRenderer.invoke('rec:list'),
   readRecording: (localId) => ipcRenderer.invoke('rec:read', localId),
   deleteRecording: (localId) => ipcRenderer.invoke('rec:delete', localId),

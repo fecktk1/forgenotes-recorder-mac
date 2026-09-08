@@ -33,6 +33,11 @@ jobs:
 
       - run: npm ci
 
+      - name: Verify capture and local recording storage
+        run: |
+          npm run verify
+          npm test
+
       # Newer npm blocks package install scripts by default, so Electron's postinstall — the
       # step that downloads the actual binary — can be skipped silently. The failure then
       # surfaces much later as an unrelated-looking packaging error, so check for the binary

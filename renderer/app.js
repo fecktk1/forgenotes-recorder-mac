@@ -1,16 +1,13 @@
-// ForgeNotes Recorder (macOS) — renderer. Captures mic + the BlackHole system input
-// as separate tracks, then drives the SAME create-session -> upload-file ->
-// finalize-session flow the web app uses. To support long meetings, each track is
-// recorded as a series of ~5-minute SEGMENTS (seq 0,1,2,…) — the transcription worker
-// concatenates them — so no single uploaded file ever hits the storage/edge size
-// ceiling. Recordings are always saved locally first, so a failed upload is retryable.
+// ForgeNotes Recorder (macOS). Captures microphone and BlackHole system input
+// as separate one-minute segments, checkpointed locally before optional upload.
+// A crash can lose the current segment; completed checkpoints remain recoverable.
 'use strict'
 
 const $ = (id) => document.getElementById(id)
 const show = (id) => $(id).classList.remove('hidden')
 const hide = (id) => $(id).classList.add('hidden')
 
-const ROTATE_MS = 5 * 60 * 1000 // segment length — keeps each uploaded file small
+const ROTATE_MS = 60 * 1000 // segment length — keeps each uploaded file small
 
 let CFG = null
 let auth = null // { access_token, refresh_token, expires_at(ms), email }
@@ -23,6 +20,7 @@ async function boot() {
   const verEl = $('app-version')
   if (verEl && CFG.version) verEl.textContent = `v${CFG.version}`
   wireUpdateBadge(verEl)
+  wireEvents()
   if (CFG._parseError || !CFG.supabaseUrl || !CFG.supabaseAnonKey) {
     if (CFG._parseError) {
       const detail = document.querySelector('#config-error p')
@@ -31,9 +29,11 @@ async function boot() {
       }
     }
     show('config-error')
+    show('login-view')
+    $('login-btn').disabled = true
+    await refreshPending()
     return
   }
-  wireEvents()
   const refresh = await window.desktop.secureGet()
   if (refresh) {
     try {
@@ -150,7 +150,8 @@ async function callFn(name, { body, formData } = {}) {
 async function enterRecorder() {
   hide('login-view')
   show('recorder-view')
-  $('account-email').textContent = auth.email || 'Signed in'
+  $('account-email').textContent = auth?.email || 'Recording locally'
+  $('signout-btn').textContent = auth ? 'Sign out' : 'Sign in'
   await populateMics()
   runPreflight()
 }
@@ -395,6 +396,26 @@ function setupMeters(micStream, systemStream) {
 // ---------------------------------------------------------------- segmented recording
 // One MediaRecorder per track per segment. On stop (rotation or final), its onstop
 // pushes the completed, independently-decodable webm blob to rec.segments.
+function bankSegment(track, blob, startOffsetMs, durationMs) {
+  if (!blob.size || !rec) return Promise.resolve()
+  const current = rec
+  const seq = current.nextSeq[track] || 0
+  current.nextSeq[track] = seq + 1
+  const entry = { track, seq, startOffsetMs, durationMs }
+  current.segments.push(entry)
+  const writing = current.writes.then(async () => {
+    await window.desktop.checkpoint(`rec_${current.startedAt}`, { ...current.meta, createdAt: new Date(current.startedAt).toISOString() }, { ...entry, data: await blob.arrayBuffer() })
+  })
+  current.writes = writing
+  writing.catch((e) => {
+    if (current.saveError) return
+    current.saveError = e
+    setStatus('Local saving failed. Capture is stopping; completed checkpoints remain on disk. ' + e.message, 'error')
+    if (rec === current && !current.stopping) void stopRecording().catch(() => {})
+  })
+  return writing
+}
+
 function startTrackSegment(track, stream) {
   if (!stream) return null
   const chunks = []
@@ -405,7 +426,7 @@ function startTrackSegment(track, stream) {
   }
   recorder.onstop = () => {
     const blob = new Blob(chunks, { type: rec ? rec.mime : 'audio/webm' })
-    if (blob.size && rec) rec.segments.push({ track, blob, startOffsetMs, durationMs: Math.max(0, elapsedMs() - startOffsetMs) })
+    if (blob.size && rec) bankSegment(track, blob, startOffsetMs, Math.max(0, elapsedMs() - startOffsetMs))
   }
   recorder.start(1000)
   return { recorder, chunks, startOffsetMs }
@@ -431,7 +452,7 @@ function flushSegment(key, track) {
     if (!seg || !seg.recorder) return resolve()
     seg.recorder.onstop = () => {
       const blob = new Blob(seg.chunks, { type: rec ? rec.mime || 'audio/webm' : 'audio/webm' })
-      if (blob.size && rec) rec.segments.push({ track, blob, startOffsetMs: seg.startOffsetMs, durationMs: Math.max(0, elapsedMs() - seg.startOffsetMs) })
+      if (blob.size && rec) bankSegment(track, blob, seg.startOffsetMs, Math.max(0, elapsedMs() - seg.startOffsetMs))
       resolve()
     }
     if (seg.recorder.state !== 'inactive') seg.recorder.stop()
@@ -442,6 +463,7 @@ function flushSegment(key, track) {
 async function startRecording() {
   setStatus('', null)
   hide('open-link')
+  stopLocalPlayback()
   stopPreflightMeter() // release the preflight mic before opening the recording streams
   const micId = $('mic').value
   const profile = captureProfile()
@@ -505,6 +527,9 @@ async function startRecording() {
     mic: null,
     system: null,
     segments: [],
+    nextSeq: {},
+    writes: Promise.resolve(),
+    saveError: null,
     rotateTimer: null,
     timer: null,
     meters: null,
@@ -597,9 +622,8 @@ async function stopRecording() {
   rec.micStream.getTracks().forEach((t) => t.stop())
   if (rec.systemStream) rec.systemStream.getTracks().forEach((t) => t.stop())
 
+  const current = rec
   const segments = rec.segments
-  const durationSec = Math.max(1, Math.round(elapsedMs() / 1000))
-  const baseMeta = { ...rec.meta, durationSec, createdAt: new Date().toISOString() }
   const localId = `rec_${rec.startedAt}`
   rec = null
   resetControls()
@@ -609,31 +633,18 @@ async function stopRecording() {
     return
   }
 
-  // Assign each track its own seq 0,1,2,… in chronological order.
-  const seqByTrack = {}
-  const seqd = [...segments].sort((a, b) => (a.startOffsetMs - b.startOffsetMs) || a.track.localeCompare(b.track)).map((s) => {
-    seqByTrack[s.track] = seqByTrack[s.track] === undefined ? 0 : seqByTrack[s.track] + 1
-    return { track: s.track, seq: seqByTrack[s.track], blob: s.blob, startOffsetMs: s.startOffsetMs, durationMs: s.durationMs }
-  })
-  const meta = {
-    ...baseMeta,
-    segments: seqd.map((s) => ({ track: s.track, seq: s.seq, startOffsetMs: s.startOffsetMs, durationMs: s.durationMs })),
-    tracks: Array.from(new Set(seqd.map((s) => s.track))),
-  }
-
-  // Always persist locally BEFORE attempting upload (offline-safe).
   try {
-    const ipcSegs = await Promise.all(
-      seqd.map(async (s) => ({ track: s.track, seq: s.seq, data: await s.blob.arrayBuffer() })),
-    )
-    await window.desktop.saveRecording(localId, meta, ipcSegs)
+    await current.writes
+    await window.desktop.finishRecording(localId)
     await refreshPending()
   } catch (e) {
-    setStatus(`Could not save the recording locally: ${e.message}`, 'error')
+    await refreshPending().catch(() => {})
+    setStatus(`Could not finish saving. Completed checkpoints remain on disk: ${e.message}`, 'error')
     return
   }
+  setStatus('Saved on this device. Play it below, open its folder, or choose Upload & transcribe.', 'ok')
+  if ($('auto-upload').checked && auth) await retryPending(localId, $('stop-btn'))
 
-  await uploadSegments(localId, meta, seqd)
 }
 
 function resetControls() {
@@ -783,7 +794,7 @@ async function uploadSegments(localId, meta, seqd) {
     // copy and link to the meeting.
     const sessionStatus = String((created.session && created.session.status) || '')
     if (created.existing && sessionStatus && sessionStatus !== 'created' && sessionStatus !== 'uploading') {
-      await window.desktop.deleteRecording(localId)
+      await window.desktop.markUploaded(localId, sessionId)
       await refreshPending()
       await diag(`upload skipped for ${localId}: session ${sessionId} already ${sessionStatus}`)
       showUploaded(sessionId, 'Already uploaded — ForgeNotes has this meeting.')
@@ -795,7 +806,8 @@ async function uploadSegments(localId, meta, seqd) {
 
     let done = 0
     let resumed = 0
-    for (const s of seqd) {
+    for (const saved of seqd) {
+      const s = { ...saved, blob: saved.blob || new Blob([await window.desktop.readSegment(localId, saved)], { type: 'audio/webm' }) }
       const sha = await sha256Hex(await s.blob.arrayBuffer())
       const prev = have.get(`${s.track}:${s.seq}`)
       const alreadyUploaded = prev && (prev.sha256 ? prev.sha256 === sha : Number(prev.bytes) === s.blob.size)
@@ -812,7 +824,7 @@ async function uploadSegments(localId, meta, seqd) {
       body: { session_id: sessionId, duration_seconds: meta.durationSec || 0 },
     })
 
-    await window.desktop.deleteRecording(localId)
+    await window.desktop.markUploaded(localId, sessionId)
     await refreshPending()
     await diag(`upload complete ${localId} -> session ${sessionId} (${seqd.length} segments, ${resumed} resumed)`)
 
@@ -832,6 +844,55 @@ async function uploadSegments(localId, meta, seqd) {
     activeUploads.delete(localId)
     await refreshPending()
   }
+}
+
+let stopLocalPlayback = () => {}
+async function playLocalRecording(localId) {
+  stopLocalPlayback()
+  const { meta, files } = await window.desktop.playback(localId)
+  if (!files.length) throw new Error('No playable audio is saved.')
+  const panel = $('local-player'); panel.replaceChildren(); panel.classList.remove('hidden')
+  const label = document.createElement('p'); label.textContent = meta.title || 'Local recording'
+  const toggle = document.createElement('button'); toggle.className = 'btn primary'; toggle.textContent = 'Pause'
+  const close = document.createElement('button'); close.className = 'btn ghost'; close.textContent = 'Close player'
+  const select = document.createElement('select')
+  const trackNames = [...new Set(files.map((f) => f.track))]
+  for (const name of ['everyone', ...trackNames]) {
+    const option = document.createElement('option'); option.value = name; option.textContent = name === 'everyone' ? 'Everyone' : name; select.appendChild(option)
+  }
+  const seek = document.createElement('input'); seek.type = 'range'; seek.min = '0'; seek.step = '0.1'
+  seek.max = String(Math.max(...files.map((f) => (f.startOffsetMs + f.durationMs) / 1000)))
+  seek.setAttribute('aria-label', 'Local playback position')
+  const clock = document.createElement('span')
+  let players = []; let position = 0; let playing = true
+  function pause() { players.forEach((p) => p.pause()) }
+  function dispose() { players.forEach(p => { p.onended = null; p.ontimeupdate = null; p.onerror = null; p.onloadedmetadata = null; p.removeAttribute('src'); p.load() }) }
+  function playAt(seconds) {
+    pause(); dispose(); players = []; position = seconds
+    const selected = select.value === 'everyone' ? trackNames : [select.value]
+    const chosen = selected.map((track) => {
+      const trackFiles = files.filter((f) => f.track === track).sort((a, b) => a.seq - b.seq)
+      return [...trackFiles].reverse().find((f) => f.startOffsetMs / 1000 <= seconds && (f.startOffsetMs + f.durationMs) / 1000 > seconds)
+    }).filter(Boolean)
+    if (!chosen.length) { playing = false; toggle.textContent = 'Play'; return }
+    const masterFile = chosen.reduce((a, b) => a.durationMs >= b.durationMs ? a : b)
+    for (const file of chosen) {
+      const audio = new Audio(file.url); players.push(audio)
+      audio.onloadedmetadata = () => { audio.currentTime = Math.max(0, seconds - file.startOffsetMs / 1000); if (playing) audio.play().catch(() => { playing = false; toggle.textContent = 'Play' }) }
+      audio.onerror = () => { pause(); setStatus('A saved segment could not be played. Open folder to inspect it.', 'error') }
+      if (file === masterFile) {
+        audio.ontimeupdate = () => { position = file.startOffsetMs / 1000 + audio.currentTime; seek.value = String(position); clock.textContent = `${Math.floor(position / 60)}:${String(Math.floor(position % 60)).padStart(2, '0')}` }
+        audio.onended = () => { const nextFile = files.filter(f => selected.includes(f.track) && f.startOffsetMs > file.startOffsetMs).sort((a,b) => a.startOffsetMs-b.startOffsetMs)[0]; if (nextFile) playAt(nextFile.startOffsetMs / 1000); else { playing = false; toggle.textContent = 'Play'; pause() } }
+      }
+    }
+  }
+  toggle.onclick = () => { playing = !playing; toggle.textContent = playing ? 'Pause' : 'Play'; if (playing) playAt(position >= Number(seek.max) ? 0 : position); else pause() }
+  seek.oninput = () => playAt(Number(seek.value))
+  select.onchange = () => playAt(position)
+  stopLocalPlayback = () => { pause(); dispose(); panel.replaceChildren(); panel.classList.add('hidden') }
+  close.onclick = stopLocalPlayback
+  panel.append(label, toggle, select, seek, clock, close)
+  playAt(0)
 }
 
 // ---------------------------------------------------------------- offline queue
@@ -859,7 +920,7 @@ async function refreshPending() {
     const when = formatWhen(item.meta.createdAt)
     const tracks = (item.meta.tracks || []).join(' + ')
     const setup = item.meta.capture_profile === 'room_single_mic' ? 'in person' : 'online call'
-    sub.textContent = `${when} · ${setup} · ${tracks} · ${item.meta.durationSec || 0}s`
+    sub.textContent = `${when} · ${setup} · ${tracks} · ${item.meta.durationSec || 0}s${item.meta.state === 'recording' ? ' · recovered checkpoints (recording interrupted)' : ''}`
     meta.appendChild(title)
     meta.appendChild(sub)
 
@@ -873,13 +934,23 @@ async function refreshPending() {
       retry.textContent = 'Uploading…'
       retry.disabled = true
     } else {
-      retry.textContent = 'Retry'
+      retry.textContent = item.meta.state === 'uploaded' ? 'Uploaded' : 'Upload & transcribe'
+      retry.disabled = ['uploaded', 'damaged'].includes(item.meta.state) || Boolean(rec && `rec_${rec.startedAt}` === item.localId)
     }
     retry.onclick = () => retryPending(item.localId, retry)
     const discard = document.createElement('button')
     discard.className = 'btn ghost'
     discard.textContent = 'Discard'
     discard.onclick = () => discardPending(item.localId)
+    const play = document.createElement('button')
+    play.className = 'btn ghost'; play.textContent = 'Play recording'; play.disabled = item.meta.state === 'damaged'
+    play.onclick = () => playLocalRecording(item.localId).catch((e) => setStatus(e.message, 'error'))
+    const folder = document.createElement('button')
+    folder.className = 'btn ghost'; folder.textContent = 'Open folder'
+    folder.onclick = () => window.desktop.openRecordingFolder(item.localId).catch((e) => setStatus(e.message, 'error'))
+    discard.disabled = activeUploads.has(item.localId) || Boolean(rec && `rec_${rec.startedAt}` === item.localId)
+    actions.appendChild(play)
+    actions.appendChild(folder)
     actions.appendChild(retry)
     actions.appendChild(discard)
 
@@ -901,17 +972,8 @@ async function retryPending(localId, btn) {
   btn.disabled = true
   btn.textContent = 'Uploading…'
   try {
-    const { meta, segments } = await window.desktop.readRecording(localId)
-    const seqd = (segments || []).map((s) => {
-      const stored = (meta.segments || []).find((row) => row.track === s.track && row.seq === s.seq) || {}
-      return {
-        track: s.track,
-        seq: s.seq,
-        startOffsetMs: stored.startOffsetMs,
-        durationMs: stored.durationMs,
-        blob: new Blob([s.data], { type: 'audio/webm' }),
-      }
-    })
+    const { meta, files } = await window.desktop.playback(localId)
+    const seqd = files.map(({ url, ...segment }) => segment)
     if (!seqd.length) throw new Error('No audio on disk')
     await uploadSegments(localId, meta, seqd)
   } catch (e) {
@@ -975,6 +1037,9 @@ function wireEvents() {
     if (e.key === 'Enter') $('login-btn').click()
   }
 
+  $('auto-upload').checked = localStorage.getItem('fn_auto_upload') === 'true'
+  $('auto-upload').onchange = (e) => localStorage.setItem('fn_auto_upload', String(e.target.checked))
+  $('local-record-btn').onclick = enterRecorder
   $('signout-btn').onclick = signOut
   $('start-btn').onclick = startRecording
   $('pause-btn').onclick = togglePause
