@@ -105,7 +105,7 @@ jobs:
         working-directory: release
         run: shasum -a 256 ForgeNotes-Recorder.dmg > ForgeNotes-Recorder.dmg.sha256
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ForgeNotes-Recorder-macOS-${{ github.sha }}
           path: |
