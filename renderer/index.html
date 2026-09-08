@@ -30,6 +30,7 @@
       <!-- Login -->
       <section id="login-view" class="card hidden">
         <h2>Sign in</h2>
+        <button id="local-record-btn" class="btn ghost">Record locally without signing in</button>
         <p class="muted">Use your ForgeNotes (TheContentForge) account.</p>
         <label class="field">
           <span>Email</span>
@@ -170,10 +171,11 @@
           <p id="consent-copy" class="consent">🔴 Recording captures your mic and (if enabled) everyone on the call.
             Make sure participants consent before you start.</p>
 
+          <label class="checkbox"><input id="auto-upload" type="checkbox" /><span>Automatically upload after saving (optional)</span></label>
           <div class="controls">
             <button id="start-btn" class="btn primary big">Start recording</button>
             <button id="pause-btn" class="btn ghost hidden">Pause</button>
-            <button id="stop-btn" class="btn danger hidden">Stop &amp; upload</button>
+            <button id="stop-btn" class="btn danger hidden">Stop &amp; save</button>
           </div>
 
           <div id="meters" class="meters hidden">
@@ -208,8 +210,9 @@
 
       <!-- Pending uploads / offline queue -->
       <section id="pending-view" class="card hidden">
-        <h3>Pending uploads</h3>
-        <p class="muted small">Recordings saved on this device that haven't reached ForgeNotes yet.</p>
+        <h3>Recordings on this device</h3>
+        <p class="muted small">Recordings stay on this device until you delete them. Uploading is optional.</p>
+        <div id="local-player" class="hidden"></div>
         <ul id="pending-list" class="pending-list"></ul>
       </section>
     </main>

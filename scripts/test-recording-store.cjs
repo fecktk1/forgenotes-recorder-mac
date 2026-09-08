@@ -1,0 +1,31 @@
+const { test } = require('node:test')
+const assert = require('node:assert/strict')
+const fs = require('node:fs/promises')
+const path = require('node:path')
+const os = require('node:os')
+const { recordingStore } = require('../recording-store')
+
+test('checkpoints survive restart, concurrent tracks, upload, and conflicts', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'forgenotes-store-test-'))
+  try {
+    const store = recordingStore(root)
+    const segment = (track, seq) => ({ track, seq, startOffsetMs: seq*60000, durationMs: 60000, data: new Uint8Array([1,2,3,seq]).buffer })
+    await Promise.all(['mic','system'].flatMap(track => [0,1].map(seq => store.checkpoint('recording1',{title:'Test'},segment(track,seq)))))
+    const restarted = recordingStore(root)
+    assert.equal((await restarted.playback('recording1')).files.length,4)
+    assert.equal((await restarted.metadata('recording1')).durationSec,120,'dual tracks count once')
+    await restarted.checkpoint('recording1',{},segment('mic',0))
+    assert.equal((await restarted.metadata('recording1')).segments.length,4,'retry is idempotent')
+    await assert.rejects(()=>restarted.checkpoint('recording1',{}, {...segment('mic',0),data:new Uint8Array([9]).buffer}),/checkpoint_conflict/)
+    await restarted.update('recording1',{state:'uploaded',sessionId:'server1'})
+    assert.equal((await restarted.playback('recording1')).files.length,4,'upload retains local audio')
+    await fs.writeFile(path.join(root,'recording1','mic-0001.webm'),new Uint8Array([1]))
+    await assert.rejects(()=>restarted.playback('recording1'),/segment_incomplete/)
+    assert.throws(()=>restarted.directory('../escape'),/invalid_local_id/)
+    await fs.writeFile(path.join(root,'recording1','meta.json'),'{broken')
+    await assert.rejects(()=>restarted.metadata('recording1'),SyntaxError)
+  } finally {
+    assert.ok(root.startsWith(path.resolve(os.tmpdir())+path.sep+'forgenotes-store-test-'))
+    await fs.rm(root,{recursive:true,force:true})
+  }
+})
