@@ -34,13 +34,21 @@ let announceClip = null // the announcement or preview clip that is playing, if 
 // whether opening the capture can still raise the macOS window.
 const SYSTEM_AUDIO_PREF_KEY = 'fn_system_audio_pref'
 const NATIVE_ASKED_KEY = 'fn_native_audio_asked'
-const NATIVE_ANSWER_WAIT_MS = 70 * 1000 // macOS gives up on an unanswered window after 60 s
-const NATIVE_UNANSWERED_AFTER_MS = 55 * 1000 // a track ending this late is that timeout, not a refusal
-const NATIVE_SETTLE_MS = 2500 // permission already answered: frames arrive or the track ends fast
+// Waits around the macOS permission window. Measured on macOS 27 with Electron 43: while the
+// window is unanswered, the display-media request neither resolves nor rejects, and it was
+// still pending 88 s later, so every wait on it here is bounded.
+const NATIVE_WAIT = {
+  answerMs: 70 * 1000, // first request: macOS gives up on an unanswered window after 60 s
+  unansweredAfterMs: 55 * 1000, // a track ending this late is that timeout, not a refusal
+  settleMs: 2500, // permission already answered: frames arrive or the track ends fast
+  startMs: 4000, // at Start and when reopening: never hold the recording up longer than this
+  abandonMs: 80 * 1000, // a request macOS has not answered by now will never be answered
+}
 const RAW_AUDIO = { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
 const REACQUIRE_DELAYS_MS = [300, 1500, 4000] // a track ended mid-recording: reopen it
 let systemAudioInfo = { platform: 'darwin', systemVersion: '', nativeSupported: false, nativeMinVersion: SA.NATIVE_MIN_MACOS_LABEL }
 let nativeCheck = null // the native call-audio check in flight, if any (one at a time)
+let nativeOpening = null // a native capture request macOS has not answered yet: { startedAt, late }
 let starting = false // Start pressed and not yet recording (it can wait on the macOS window)
 
 // ---------------------------------------------------------------- boot
@@ -279,6 +287,50 @@ function openNativeSystemStream() {
   return navigator.mediaDevices.getDisplayMedia({ audio: { ...RAW_AUDIO }, video: false })
 }
 
+// Asks macOS for call audio and waits at most waitMs for it.
+//   resolves to the stream   macOS handed one over (it may already have ended: a refusal)
+//   resolves to null         macOS has not answered yet (its permission window is open).
+//                            If the stream arrives later, onLate receives it; with no
+//                            onLate it is closed.
+//   rejects                  the request was refused before reaching macOS
+// Only one request is ever outstanding: while macOS is still deciding an earlier one, a new
+// call does not ask again, it takes over the late delivery of that one.
+function openNativeWithin(waitMs, onLate) {
+  if (nativeOpening && performance.now() - nativeOpening.startedAt < NATIVE_WAIT.abandonMs) {
+    nativeOpening.late = onLate || null
+    return Promise.resolve(null)
+  }
+  const pending = { startedAt: performance.now(), late: onLate || null }
+  nativeOpening = pending // an older, abandoned request is closed if it ever arrives
+  return new Promise((resolve, reject) => {
+    let waiting = true
+    const timer = setTimeout(() => {
+      waiting = false
+      resolve(null)
+    }, waitMs)
+    openNativeSystemStream().then((stream) => {
+      const current = nativeOpening === pending
+      if (current) nativeOpening = null
+      if (waiting) {
+        waiting = false
+        clearTimeout(timer)
+        resolve(stream)
+      } else if (current && pending.late) {
+        pending.late(stream)
+      } else {
+        stream.getTracks().forEach((t) => t.stop())
+      }
+    }, (error) => {
+      if (nativeOpening === pending) nativeOpening = null
+      if (waiting) {
+        waiting = false
+        clearTimeout(timer)
+        reject(error)
+      }
+    })
+  })
+}
+
 // Frames macOS has delivered to a track so far, or null where Chromium cannot say.
 function deliveredFrames(track) {
   try {
@@ -291,12 +343,12 @@ function deliveredFrames(track) {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
-// Waits for a freshly opened native track to prove itself. macOS reports a refusal only by
-// ending the track, with no error (Electron's desktopCapturer docs call it a dead stream),
-// and delivers nothing at all while its permission window is unanswered.
+// Waits for a native track that macOS has handed over to prove itself. A refusal is only
+// reported by the track ending, with no error (Electron's desktopCapturer docs call it a
+// dead stream).
 //   'ok'        audio frames are arriving (silence counts: frames, not loudness)
 //   'ended'     macOS refused
-//   'no_frames' still live after waitMs but nothing delivered (the window is unanswered)
+//   'no_frames' still live after waitMs but nothing has been delivered
 async function settleNativeTrack(track, waitMs) {
   const started = performance.now()
   for (;;) {
@@ -331,39 +383,58 @@ function renderNativeAudioState(state) {
   else status.textContent = copy.text
 }
 
+// Judges a stream macOS handed over for a check, closes it, and returns
+// 'ok' | 'ended' | 'no_frames' (see settleNativeTrack).
+async function judgeNativeStream(stream, requestedAt, waitMs) {
+  try {
+    let outcome = await settleNativeTrack(stream.getAudioTracks()[0], waitMs)
+    // A track that ends about a minute after the request was not refused by a person:
+    // macOS gave up on an unanswered window. Still unanswered.
+    if (outcome === 'ended' && performance.now() - requestedAt >= NATIVE_WAIT.unansweredAfterMs) outcome = 'no_frames'
+    return outcome
+  } finally {
+    stream.getTracks().forEach((t) => t.stop())
+  }
+}
+
+// Records what macOS answered and shows it. Returns the state shown:
+// 'ready' | 'denied' | 'unanswered'.
+async function applyNativeOutcome(outcome) {
+  // 'ok' and 'ended' are both answers from macOS; its window will not appear again.
+  if (outcome === 'ok' || outcome === 'ended') setNativeAsked(true)
+  const state = outcome === 'ok' ? 'ready' : outcome === 'no_frames' ? 'unanswered' : 'denied'
+  await diag(`system-audio: native check -> ${outcome} (${state})`)
+  if (!rec) renderNativeAudioState(state)
+  return state
+}
+
 // Opens native call audio for a moment to learn whether macOS allows it, then closes it.
 // Nothing is recorded. With interactive false this never raises the macOS window: a Mac
 // that has not been asked yet is only told what to click. Resolves to the state shown:
-// 'ready' | 'needs_permission' | 'denied' | 'unanswered'.
+// 'ready' | 'needs_permission' | 'denied' | 'unanswered'. Always resolves, and within
+// NATIVE_WAIT.answerMs: an answer that comes later still updates the device check.
 function checkNativeAudio({ interactive = false } = {}) {
   if (nativeCheck) return nativeCheck
   const run = async () => {
     const asked = nativeAsked()
-    if (!asked && !interactive) {
+    if (!asked && !interactive && !nativeOpening) {
       renderNativeAudioState('needs_permission')
       return 'needs_permission'
     }
     renderNativeAudioState(asked ? 'checking' : 'asking')
-    let stream = null
+    const requestedAt = nativeOpening ? nativeOpening.startedAt : performance.now()
+    const waitMs = asked ? NATIVE_WAIT.settleMs : NATIVE_WAIT.answerMs
     let outcome = 'absent'
-    const opened = performance.now()
     try {
-      stream = await openNativeSystemStream()
-      outcome = await settleNativeTrack(stream.getAudioTracks()[0], asked ? NATIVE_SETTLE_MS : NATIVE_ANSWER_WAIT_MS)
-      // A track that ends about a minute in was not refused by a person: macOS gave up on
-      // an unanswered window (and Chromium restarted its audio service). Still unanswered.
-      if (outcome === 'ended' && performance.now() - opened >= NATIVE_UNANSWERED_AFTER_MS) outcome = 'no_frames'
+      const stream = await openNativeWithin(waitMs, (late) => {
+        // The macOS window was answered after this check stopped waiting.
+        void judgeNativeStream(late, requestedAt, NATIVE_WAIT.settleMs).then(applyNativeOutcome)
+      })
+      outcome = stream ? await judgeNativeStream(stream, requestedAt, NATIVE_WAIT.settleMs) : 'no_frames'
     } catch (e) {
       console.warn('[forgenotes] native call audio could not be opened:', (e && e.name) || '', (e && e.message) || e)
-    } finally {
-      if (stream) stream.getTracks().forEach((t) => t.stop())
     }
-    // 'ok' and 'ended' are both answers from macOS; the window will not appear again.
-    if (outcome === 'ok' || outcome === 'ended') setNativeAsked(true)
-    const state = outcome === 'ok' ? 'ready' : outcome === 'no_frames' ? 'unanswered' : 'denied'
-    await diag(`system-audio: native check -> ${outcome} (${state})`)
-    renderNativeAudioState(state)
-    return state
+    return applyNativeOutcome(outcome)
   }
   nativeCheck = run().finally(() => { nativeCheck = null })
   return nativeCheck
@@ -839,8 +910,10 @@ function openMicStream(deviceId) {
 
 // One of the two paths, never both: a native capture is a display-media stream, a BlackHole
 // capture is an ordinary audio input.
-function openSystemStream(path, deviceId) {
-  if (path === 'native') return openNativeSystemStream()
+// Resolves to null when macOS has not handed native call audio over within
+// NATIVE_WAIT.startMs; onLate then receives the stream if it arrives later.
+function openSystemStream(path, deviceId, onLate) {
+  if (path === 'native') return openNativeWithin(NATIVE_WAIT.startMs, onLate)
   return navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: deviceId }, ...RAW_AUDIO } })
 }
 
@@ -872,12 +945,16 @@ async function beginRecording() {
   // never be raised underneath a running microphone capture.
   let nativeState = null
   if (systemPath === 'native') {
-    if (nativeCheck) await nativeCheck
-    if (!nativeAsked()) {
-      setStatus('macOS is asking for permission to record call audio. Choose Allow in the macOS window.', 'busy')
-      nativeState = await checkNativeAudio({ interactive: true })
-      setStatus('', null)
+    const waiting = 'macOS is asking for permission to record call audio. Choose Allow in the macOS window: recording starts as soon as you answer.'
+    if (nativeCheck) {
+      if (!nativeAsked()) setStatus(waiting, 'busy')
+      nativeState = await nativeCheck
     }
+    if (!nativeAsked() && !nativeOpening) {
+      setStatus(waiting, 'busy')
+      nativeState = await checkNativeAudio({ interactive: true })
+    }
+    setStatus('', null)
   }
 
   let micStream
@@ -888,33 +965,13 @@ async function beginRecording() {
     return
   }
 
+  // BlackHole is an ordinary input and opens at once, so it is opened here. Native call
+  // audio is attached after the microphone is already being recorded (attachNativeSystemAudio):
+  // macOS may hold that request behind its permission window, and the microphone must never
+  // wait for it.
   let systemStream = null
   let warning = null
-  if (systemPath === 'native') {
-    if (!nativeAsked()) {
-      // macOS has still not answered (the window was left open, or the capture could not be
-      // requested at all). Opening it again would raise the window under the running
-      // microphone, so this recording is microphone only.
-      warning = `Only your microphone is being recorded. ${SA.nativePermissionCopy(nativeState === 'denied' ? 'denied' : 'unanswered').text}`
-    } else {
-      try {
-        systemStream = await openSystemStream('native')
-        const track = systemStream.getAudioTracks()[0]
-        const settled = await settleNativeTrack(track, 1500)
-        console.log('[forgenotes] system-audio (native) track:', track && track.label, settled, track && track.getSettings())
-        if (settled === 'ended') {
-          systemStream.getTracks().forEach((t) => t.stop())
-          systemStream = null
-          renderNativeAudioState('denied')
-          warning = SA.healthMessage({ kind: 'system', health: 'ended', path: 'native' }).text
-        }
-      } catch (e) {
-        systemStream = null
-        warning = SA.healthMessage({ kind: 'system', health: 'absent', path: 'native' }).text
-        console.error('[forgenotes] native system audio failed:', e)
-      }
-    }
-  } else if (systemPath === 'blackhole' && systemId) {
+  if (systemPath === 'blackhole' && systemId) {
     try {
       systemStream = await openSystemStream('blackhole', systemId)
       const track = systemStream.getAudioTracks()[0]
@@ -970,6 +1027,7 @@ async function beginRecording() {
     hadSystemStream: Boolean(systemStream),
     levelWatched: false,
     startWarning: warning, // why call audio was missing from the first second, if it was
+    systemOpening: systemPath === 'native', // native call audio has been asked for, not yet judged
     reacquiring: {},
     gaveUp: {},
     outputLabel: null,
@@ -991,8 +1049,10 @@ async function beginRecording() {
   show('meters')
   renderCaptureHealth(rec)
   startCaptureWatch(rec)
-  // Fire-and-forget: captions must never delay or endanger the recording.
-  if (window.fnLive) window.fnLive.start({ micStream, systemStream })
+  // Fire-and-forget: captions must never delay or endanger the recording. On the native
+  // path they start once call audio has been attached, so that they hear both sides.
+  if (systemPath === 'native') void attachNativeSystemAudio(rec, nativeState)
+  else if (window.fnLive) window.fnLive.start({ micStream, systemStream })
 
   $('start-btn').classList.add('hidden')
   $('pause-btn').classList.remove('hidden')
@@ -1003,6 +1063,54 @@ async function beginRecording() {
   show('rec-indicator')
   rec.timer = setInterval(updateTimer, 500)
   updateTimer()
+}
+
+// Native call audio for a recording that is already running on the microphone. Whatever
+// macOS does (hands the audio over, refuses, or leaves its window open), the recording goes
+// on, and the reason for missing call audio is shown.
+async function attachNativeSystemAudio(current, nativeState) {
+  const micOnly = 'Only your microphone is being recorded so far.'
+  let warning = null
+  try {
+    if (!nativeAsked() && !nativeOpening) {
+      // macOS has not said yes, and no request is waiting on it (it was refused before
+      // reaching macOS, or abandoned). Asking again now would raise the macOS window under
+      // the running microphone, so this recording stays microphone only.
+      warning = `${micOnly} ${SA.nativePermissionCopy(nativeState === 'denied' ? 'denied' : 'unanswered').text}`
+    } else {
+      const stream = await openSystemStream('native', '', (lateStream) => adoptLateSystemStream(current, lateStream))
+      const live = rec === current && !current.stopping
+      if (!stream) {
+        // macOS is showing its window (permission was reset, or never answered).
+        warning = `${micOnly} ${SA.nativePermissionCopy('unanswered').text} Call audio joins this recording as soon as macOS allows it.`
+      } else if (!live) {
+        stream.getTracks().forEach((t) => t.stop())
+      } else {
+        const track = stream.getAudioTracks()[0]
+        const settled = await settleNativeTrack(track, 1500)
+        console.log('[forgenotes] system-audio (native) track:', track && track.label, settled, track && track.getSettings())
+        if (settled === 'ended' || rec !== current || current.stopping) {
+          stream.getTracks().forEach((t) => t.stop())
+          if (settled === 'ended') {
+            setNativeAsked(true)
+            warning = SA.healthMessage({ kind: 'system', health: 'ended', path: 'native' }).text
+          }
+        } else {
+          adoptStream(current, 'system', stream)
+        }
+      }
+    }
+  } catch (e) {
+    warning = SA.healthMessage({ kind: 'system', health: 'absent', path: 'native' }).text
+    console.error('[forgenotes] native system audio failed:', e)
+  } finally {
+    current.systemOpening = false
+    current.startWarning = warning
+    if (rec === current && !current.stopping) {
+      checkCaptureHealth()
+      if (window.fnLive) window.fnLive.start({ micStream: current.micStream, systemStream: current.systemStream })
+    }
+  }
 }
 
 // ---------------------------------------------------------------- capture watch
@@ -1099,6 +1207,7 @@ function checkCaptureHealth() {
   const current = rec
   if (!current || current.stopping) return
   for (const kind of watchedKinds(current)) {
+    if (kind === 'system' && current.systemOpening) continue // not judged before it has been opened
     const stream = current[`${kind}Stream`]
     const track = stream ? stream.getAudioTracks()[0] : null
     const level = current.levels[kind] ? current.levels[kind].snapshot() : null
@@ -1126,6 +1235,9 @@ function renderCaptureHealth(current) {
   if (current.systemPath === 'none') {
     sysEl.textContent = 'Room microphone only'
     sysEl.className = 'cap ok'
+  } else if (current.systemOpening) {
+    sysEl.textContent = 'Call audio: starting…'
+    sysEl.className = 'cap'
   } else {
     const health = current.health.system
     const lost = health === 'absent' || health === 'ended' || health === 'no_frames'
@@ -1161,6 +1273,23 @@ function adoptStream(current, kind, stream) {
   current.meters = setupMeters(current.micStream, current.systemStream)
 }
 
+// Native call audio that arrives after macOS was slow to answer. During a recording that
+// still has no call audio it becomes the call-audio track from here on; otherwise it only
+// tells the app what macOS answered.
+function adoptLateSystemStream(current, stream) {
+  const track = stream.getAudioTracks()[0]
+  const usable = Boolean(track) && track.readyState === 'live'
+  if (usable && rec === current && !current.stopping && current.systemPath === 'native' && !streamIsLive(current.systemStream)) {
+    setNativeAsked(true)
+    current.startWarning = null
+    adoptStream(current, 'system', stream)
+    void diag('capture: macOS handed call audio over late; it is recorded from here on')
+    checkCaptureHealth()
+    return
+  }
+  void judgeNativeStream(stream, performance.now(), NATIVE_WAIT.settleMs).then(applyNativeOutcome)
+}
+
 async function reacquireTrack(current, kind) {
   if (current.reacquiring[kind]) return
   current.reacquiring[kind] = true
@@ -1173,7 +1302,7 @@ async function reacquireTrack(current, kind) {
       try {
         // The last microphone attempt lets macOS pick: the chosen device may be gone.
         if (kind === 'mic') stream = await openMicStream(attempt < REACQUIRE_DELAYS_MS.length - 1 ? current.micId : '')
-        else if (current.systemPath === 'native' || current.systemId) stream = await openSystemStream(current.systemPath, current.systemId)
+        else if (current.systemPath === 'native' || current.systemId) stream = await openSystemStream(current.systemPath, current.systemId, (lateStream) => adoptLateSystemStream(current, lateStream))
         if (stream && kind === 'system' && current.systemPath === 'native') {
           if ((await settleNativeTrack(stream.getAudioTracks()[0], 1500)) === 'ended') {
             stream.getTracks().forEach((t) => t.stop())

@@ -29,7 +29,14 @@ app.on('browser-window-created', (_event, window) => {
   window.webContents.setBackgroundThrottling(false)
 })
 
-const timeout = setTimeout(() => { console.error('Recorder UI test timed out'); app.exit(1) }, 150000)
+// Windows are destroyed before exiting: app.exit() with a live window has been seen to
+// leave the process hanging on a busy Mac.
+function finish(code) {
+  clearTimeout(timeout)
+  for (const window of BrowserWindow.getAllWindows()) window.destroy()
+  app.exit(code)
+}
+const timeout = setTimeout(() => { console.error('Recorder UI test timed out'); finish(1) }, 240000)
 
 // The temporary profile is removed as the process exits, after Chromium has stopped writing
 // to it, and a failure to remove it must never fail or hang the run.
@@ -54,7 +61,7 @@ require('../main.js')
 // Runs in the page before the recorder view is opened.
 function installStandIns() {
   const context = new AudioContext()
-  const fake = { mode: 'tone', displayCalls: 0, displayConstraints: [], inputs: [], tracks: [] }
+  const fake = { mode: 'tone', displayCalls: 0, displayConstraints: [], inputs: [], tracks: [], releases: [] }
   window.__fake = fake
   function synthesized(mode) {
     const destination = context.createMediaStreamDestination()
@@ -76,10 +83,13 @@ function installStandIns() {
     fake.tracks.push(track)
     return destination.stream
   }
-  navigator.mediaDevices.getDisplayMedia = async (constraints) => {
+  navigator.mediaDevices.getDisplayMedia = (constraints) => {
     fake.displayCalls += 1
     fake.displayConstraints.push(JSON.parse(JSON.stringify(constraints)))
-    return synthesized(fake.mode)
+    // 'pending': the macOS permission window is open. The request neither resolves nor
+    // rejects until the test answers it with __fake.releases[n](mode).
+    if (fake.mode === 'pending') return new Promise((resolve) => { fake.releases.push((mode) => resolve(synthesized(mode))) })
+    return Promise.resolve(synthesized(fake.mode))
   }
   const realGetUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices)
   navigator.mediaDevices.getUserMedia = (constraints) => {
@@ -126,9 +136,15 @@ app.whenReady().then(async () => {
   const fake = () => js('JSON.parse(JSON.stringify({ mode: __fake.mode, displayCalls: __fake.displayCalls, displayConstraints: __fake.displayConstraints, inputs: __fake.inputs }))')
   const setMode = (mode) => js(`__fake.mode = ${JSON.stringify(mode)}`)
   const log = () => { try { return fs.readFileSync(path.join(userData, 'upload-log.txt'), 'utf8') } catch { return '' } }
+  // Presses Start and returns how long the microphone took to be recording. Native call
+  // audio is attached after that; the second wait is for that attempt to be over.
   async function start() {
+    const pressed = Date.now()
     await click('start-btn')
-    await until('recording to start', `rec && !document.getElementById('rec-indicator').classList.contains('hidden')`)
+    await until('recording to start', `rec && rec.mic && !document.getElementById('rec-indicator').classList.contains('hidden')`)
+    const took = Date.now() - pressed
+    await until('the call-audio attempt', `!rec.systemOpening`)
+    return took
   }
   // Stops the running recording and returns what was saved for it (its meta.json).
   async function stop() {
@@ -186,9 +202,14 @@ app.whenReady().then(async () => {
     assert.equal((await fake()).displayCalls, 0, 'the macOS window is never raised by the device check')
     step('first run: the device check explains the one step and does not ask macOS by itself')
 
-    // The user clicks Allow call audio and macOS refuses (Don't Allow).
-    await setMode('dead')
+    // The user clicks Allow call audio. macOS shows its window; the app waits, and says so.
+    await setMode('pending')
     await click('native-audio-allow')
+    await until('the waiting state', `/Waiting for your answer/.test(document.getElementById('pf-system').textContent)`)
+    assert.equal(await visible('native-audio-allow'), false)
+    assert.equal(await js(`localStorage.getItem('fn_native_audio_asked')`), null)
+    // ... and the user chooses Don't Allow.
+    await js(`__fake.releases[0]('dead')`)
     await until('the refusal', `document.getElementById('pf-system').className.includes('fail')`)
     system = await row('system')
     assert.match(system.detail, /System Audio Recording Only/)
@@ -250,7 +271,67 @@ app.whenReady().then(async () => {
     assert.equal(await js(`document.getElementById('system-audio-pref').disabled`), false)
     step('saved: both tracks, in order, with the gaps kept')
 
-    // macOS delivers nothing (its window was reset and is open again, unanswered).
+    // Permission was reset since the last check, so macOS shows its window at Start. The
+    // recording must not wait for it: the microphone starts, and call audio joins when the
+    // window is answered.
+    await setMode('pending')
+    const micStartedIn = await start()
+    assert.ok(micStartedIn < 2500, `the microphone is recording at once (${micStartedIn} ms), whatever macOS is doing`)
+    assert.equal(await js('rec.systemStream'), null)
+    assert.match(await text('cap-system'), /NOT captured/)
+    assert.match(await text('capture-note'), /Only your microphone is being recorded so far/)
+    assert.match(await text('capture-note'), /Call audio joins this recording/)
+    await until('the microphone to be heard', `rec.health.mic === 'ok'`)
+    await js(`__fake.releases.at(-1)('tone')`)
+    await until('late call audio to join', `rec.systemStream && rec.systemStream.getAudioTracks()[0].readyState === 'live' && rec.health.system === 'ok'`)
+    assert.match(await text('cap-system'), /capturing/)
+    assert.equal(await visible('capture-note'), false)
+    saved = await stop()
+    assert.deepEqual([...saved.tracks].sort(), ['mic', 'system'])
+    assert.ok(saved.segments.find((s) => s.track === 'system').startOffsetMs >= 3500, 'late call audio keeps its true start time')
+    assert.match(log(), /macOS handed call audio over late/)
+    step('macOS window at Start: microphone recorded at once, call audio joins when it is answered')
+
+    // First Start on a Mac that was never asked, and the window is ignored. The wait is
+    // bounded (shortened here), the recording is microphone only, and it says why.
+    await js(`localStorage.removeItem('fn_native_audio_asked'); NATIVE_WAIT.answerMs = 1500`)
+    await setMode('pending')
+    await click('preflight-btn')
+    await until('the one-step-left state', `/Allow call audio/.test(document.getElementById('pf-system').textContent)`)
+    const callsBeforeIgnored = (await fake()).displayCalls
+    await start()
+    assert.equal(await js('rec.systemStream'), null)
+    assert.match(await text('capture-note'), /Only your microphone is being recorded so far/)
+    assert.equal((await fake()).displayCalls, callsBeforeIgnored + 1, 'macOS is asked once, not again under the running microphone')
+    await sleep(1200)
+    saved = await stop()
+    assert.deepEqual(saved.tracks, ['mic'])
+    assert.match(await text('capture-note'), /This recording has no call audio/)
+    // The window is answered after the recording: the device check turns ready by itself.
+    await js(`__fake.releases.at(-1)('tone')`)
+    await until('the late answer', `document.getElementById('pf-system').className.includes('ok') && localStorage.getItem('fn_native_audio_asked') === '1'`)
+    await js(`NATIVE_WAIT.answerMs = 70000`)
+    step('macOS window ignored at first Start: bounded wait, microphone-only recording, late answer accepted')
+
+    // A request macOS never answers is abandoned, and the next one asks afresh.
+    await setMode('pending')
+    await click('preflight-btn')
+    await until('the unanswered state', `/has not confirmed call audio/.test(document.getElementById('pf-system').textContent)`)
+    const stale = (await fake()).displayCalls
+    await click('preflight-btn')
+    await until('the unanswered state again', `/has not confirmed call audio/.test(document.getElementById('pf-system').textContent) && !nativeCheck`)
+    assert.equal((await fake()).displayCalls, stale, 'no second request while macOS is still deciding the first')
+    await js(`NATIVE_WAIT.abandonMs = 0`)
+    await setMode('tone')
+    await click('preflight-btn')
+    await until('the ready state', `document.getElementById('pf-system').className.includes('ok')`)
+    assert.equal((await fake()).displayCalls, stale + 1)
+    await js(`NATIVE_WAIT.abandonMs = 80000; __fake.releases.at(-1)('tone')`)
+    await sleep(300)
+    assert.equal(await js(`__fake.tracks.at(-1).readyState`), 'ended', 'the abandoned request is closed when it finally arrives')
+    step('unanswered request: not repeated while pending, abandoned after its time, then asked afresh')
+
+    // macOS delivers nothing (the track is live but no frame ever arrives).
     await setMode('unanswered')
     await start()
     await until('the no-frames report', `rec.health.system === 'no_frames'`, 12000)
@@ -323,10 +404,8 @@ app.whenReady().then(async () => {
   }
 
   console.log(JSON.stringify({ electron: process.versions.electron, macos: process.env.FORGENOTES_FAKE_MACOS_VERSION, steps: steps.length }))
-  clearTimeout(timeout)
-  app.exit(0)
+  finish(0)
 }).catch((error) => {
   console.error(error)
-  clearTimeout(timeout)
-  app.exit(1)
+  finish(1)
 })

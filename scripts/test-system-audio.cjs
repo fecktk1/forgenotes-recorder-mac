@@ -266,7 +266,10 @@ const read = (file) => fs.readFileSync(path.join(root, file), 'utf8')
 test('the two capture paths cannot both be opened for one recording', () => {
   const app = read('renderer/app.js')
   // One stream slot, filled through one function that takes exactly one path.
-  assert.match(app, /function openSystemStream\(path, deviceId\) \{\n {2}if \(path === 'native'\) return openNativeSystemStream\(\)\n {2}return navigator\.mediaDevices\.getUserMedia/)
+  assert.match(app, /function openSystemStream\(path, deviceId, onLate\) \{\n {2}if \(path === 'native'\) return openNativeWithin\(NATIVE_WAIT\.startMs, onLate\)\n {2}return navigator\.mediaDevices\.getUserMedia/)
+  // Every native request goes through the one bounded opener: a pending macOS window can
+  // never leave Start or the device check waiting without end.
+  assert.equal(app.split('openNativeSystemStream()').length - 1, 2, 'defined once, called once (inside openNativeWithin)')
   assert.equal(app.split('getDisplayMedia(').length - 1, 1, 'native capture is requested from exactly one place')
   assert.match(app, /getDisplayMedia\(\{ audio: \{ \.\.\.RAW_AUDIO \}, video: false \}\)/, 'audio only: no screen capture')
   // Room mode records no call audio on either path.
