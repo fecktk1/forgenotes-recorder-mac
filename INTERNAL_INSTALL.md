@@ -10,6 +10,9 @@ around and no Terminal command to run.
 2. Open the DMG and drag **ForgeNotes Recorder** into **Applications**.
 3. Eject the DMG.
 4. Open ForgeNotes Recorder from Applications and approve microphone access when asked.
+5. For online calls on macOS 14.2 or newer: under **Device check**, click **Allow call audio** and
+   choose **Allow** in the macOS window. Nothing else needs installing. On macOS 12.0 to 14.1,
+   follow the BlackHole steps in the README instead.
 
 ## Updates
 
@@ -41,4 +44,5 @@ The team identifier is `X36AQ2X3XN`.
 
 - macOS 12 Monterey or newer
 - Apple Silicon or 64-bit Intel Mac (the build is universal)
-- BlackHole 2ch and a Multi-Output Device for capturing call audio
+- For call audio on macOS 12.0 to 14.1 only: BlackHole 2ch and a Multi-Output Device. macOS 14.2
+  and newer record call audio without a driver.

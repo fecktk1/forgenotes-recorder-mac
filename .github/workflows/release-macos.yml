@@ -59,6 +59,7 @@ jobs:
         run: |
           npm audit --audit-level=low
           npm run test:media-runtime
+          npm run test:recorder-ui
 
       # Both signing secrets are decoded to files rather than passed as base64 strings.
       # CSC_LINK does accept inline base64, but macOS `base64` wraps its output at 76

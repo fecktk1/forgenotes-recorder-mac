@@ -1,7 +1,11 @@
-// ForgeNotes Recorder (macOS). Captures microphone and BlackHole system input
-// as separate one-minute segments, checkpointed locally before optional upload.
+// ForgeNotes Recorder (macOS). Captures the microphone and the call audio as separate
+// one-minute segments, checkpointed locally before optional upload. Call audio comes from
+// macOS itself on 14.2 and later (a Core Audio tap, through getDisplayMedia) and from the
+// BlackHole input elsewhere: one or the other, decided in system-audio.js, never both.
 // A crash can lose the current segment; completed checkpoints remain recoverable.
 'use strict'
+
+const SA = window.FNSystemAudio
 
 const $ = (id) => document.getElementById(id)
 const show = (id) => $(id).classList.remove('hidden')
@@ -25,9 +29,28 @@ let announceVoices = { voices: [], defaultId: '' } // from renderer/announce/voi
 let announceVoicesLoaded = Promise.resolve() // settles once the voice list has been read
 let announceClip = null // the announcement or preview clip that is playing, if any
 
+// Call audio. The preference is the one setting ('auto' or 'blackhole'); "asked" records that
+// macOS has already answered the permission question for native capture, so the app knows
+// whether opening the capture can still raise the macOS window.
+const SYSTEM_AUDIO_PREF_KEY = 'fn_system_audio_pref'
+const NATIVE_ASKED_KEY = 'fn_native_audio_asked'
+const NATIVE_ANSWER_WAIT_MS = 70 * 1000 // macOS gives up on an unanswered window after 60 s
+const NATIVE_UNANSWERED_AFTER_MS = 55 * 1000 // a track ending this late is that timeout, not a refusal
+const NATIVE_SETTLE_MS = 2500 // permission already answered: frames arrive or the track ends fast
+const RAW_AUDIO = { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+const REACQUIRE_DELAYS_MS = [300, 1500, 4000] // a track ended mid-recording: reopen it
+let systemAudioInfo = { platform: 'darwin', systemVersion: '', nativeSupported: false, nativeMinVersion: SA.NATIVE_MIN_MACOS_LABEL }
+let nativeCheck = null // the native call-audio check in flight, if any (one at a time)
+let starting = false // Start pressed and not yet recording (it can wait on the macOS window)
+
 // ---------------------------------------------------------------- boot
 async function boot() {
   CFG = await window.desktop.getConfig()
+  try {
+    systemAudioInfo = { ...systemAudioInfo, ...(await window.desktop.systemAudioInfo()) }
+  } catch (e) {
+    console.warn('[forgenotes] could not read the system-audio capability:', (e && e.message) || e)
+  }
   const verEl = $('app-version')
   if (verEl && CFG.version) verEl.textContent = `v${CFG.version}`
   wireUpdateBadge(verEl)
@@ -182,7 +205,9 @@ function setCaptureProfile(profile, { syncSource = true, check = true } = {}) {
   $('cap-mic').textContent = room ? 'Room mic' : 'You (mic)'
   $('mode-hint').textContent = room
     ? 'Uses one microphone for everyone in the room and separates speakers during transcription.'
-    : 'Captures your microphone and BlackHole call audio as separate tracks.'
+    : systemAudioChoice().path === 'native'
+      ? 'Captures your microphone and the call audio as separate tracks.'
+      : 'Captures your microphone and the call audio (through BlackHole) as separate tracks.'
   renderConsentCopy()
   if (syncSource) {
     if (room) $('source').value = 'in_person'
@@ -205,9 +230,149 @@ function renderConsentCopy() {
   $('consent-copy').textContent = announceEnabled() ? base + spoken : base
 }
 
-// A pre-record device check: is the mic live (with a level meter to prove it), is the
-// call-audio source (BlackHole) present + selected, and is there enough disk for a long
-// meeting? Purely informational — Start still works; capture errors also surface on Start.
+// ---------------------------------------------------------------- call audio: which path
+function storedSystemAudioPref() {
+  try { return localStorage.getItem(SYSTEM_AUDIO_PREF_KEY) } catch { return null }
+}
+
+// { path: 'native' | 'blackhole', nativeSupported, reason }. The single place the renderer
+// decides how call audio is captured.
+function systemAudioChoice() {
+  return SA.choosePath({
+    platform: systemAudioInfo.platform,
+    systemVersion: systemAudioInfo.systemVersion,
+    preference: storedSystemAudioPref(),
+  })
+}
+
+function nativeAsked() {
+  try { return localStorage.getItem(NATIVE_ASKED_KEY) === '1' } catch { return false }
+}
+
+function setNativeAsked(asked) {
+  try {
+    if (asked) localStorage.setItem(NATIVE_ASKED_KEY, '1')
+    else localStorage.removeItem(NATIVE_ASKED_KEY)
+  } catch { /* storage unavailable: the app asks again next time */ }
+}
+
+// Shows the controls of the path in use and hides the other one's. A Mac that records call
+// audio natively never sees the BlackHole instructions unless its user picks BlackHole.
+function renderSystemAudioFields() {
+  const choice = systemAudioChoice()
+  const native = choice.path === 'native'
+  $('native-audio-fields').classList.toggle('hidden', !native)
+  $('blackhole-fields').classList.toggle('hidden', native)
+  $('system-audio-pref-row').classList.toggle('hidden', !choice.nativeSupported)
+  $('system-audio-pref').value = native ? 'auto' : 'blackhole'
+  $('first-run-audio').textContent = native
+    ? 'Call audio is recorded by macOS itself: there is nothing to install.'
+    : choice.nativeSupported
+      ? ''
+      : `On this version of macOS, call audio needs the free BlackHole driver (the README has the steps). macOS ${systemAudioInfo.nativeMinVersion} and later record it without a driver.`
+}
+
+// ---------------------------------------------------------------- call audio: native capture
+// Audio only. Main answers with Electron's system-audio loopback and never grants a video
+// source, so macOS is asked for "System Audio Recording Only" and not for Screen Recording.
+function openNativeSystemStream() {
+  return navigator.mediaDevices.getDisplayMedia({ audio: { ...RAW_AUDIO }, video: false })
+}
+
+// Frames macOS has delivered to a track so far, or null where Chromium cannot say.
+function deliveredFrames(track) {
+  try {
+    const stats = track && track.stats
+    return stats && typeof stats.deliveredFrames === 'number' ? stats.deliveredFrames : null
+  } catch {
+    return null
+  }
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+// Waits for a freshly opened native track to prove itself. macOS reports a refusal only by
+// ending the track, with no error (Electron's desktopCapturer docs call it a dead stream),
+// and delivers nothing at all while its permission window is unanswered.
+//   'ok'        audio frames are arriving (silence counts: frames, not loudness)
+//   'ended'     macOS refused
+//   'no_frames' still live after waitMs but nothing delivered (the window is unanswered)
+async function settleNativeTrack(track, waitMs) {
+  const started = performance.now()
+  for (;;) {
+    if (!track || track.readyState === 'ended') return 'ended'
+    const frames = deliveredFrames(track)
+    if (frames === null) {
+      // No frame counter in this Chromium: a track still live after a moment is the best
+      // evidence available.
+      if (performance.now() - started >= 1200) return 'ok'
+    } else if (frames > 0) {
+      return 'ok'
+    }
+    if (performance.now() - started >= waitMs) return 'no_frames'
+    await sleep(150)
+  }
+}
+
+function renderNativeAudioState(state) {
+  const copy = state === 'checking'
+    ? { row: 'checking', text: 'Checking…', allow: false, settings: false }
+    : SA.nativePermissionCopy(state)
+  // A check can finish after the user has moved to the room setup or to BlackHole: the
+  // device-check row then belongs to that setup and is left alone.
+  if (captureProfile() === 'remote_dual_track' && systemAudioChoice().path === 'native') {
+    setPreflightRow('system', copy.row, 'Call audio', copy.text)
+  }
+  $('native-audio-allow').classList.toggle('hidden', !copy.allow)
+  $('native-audio-settings').classList.toggle('hidden', !copy.settings)
+  const status = $('native-audio-status')
+  if (state === 'ready') status.textContent = 'macOS records the call audio directly. No driver and no audio routing.'
+  else if (state === 'checking') status.textContent = 'Checking call audio…'
+  else status.textContent = copy.text
+}
+
+// Opens native call audio for a moment to learn whether macOS allows it, then closes it.
+// Nothing is recorded. With interactive false this never raises the macOS window: a Mac
+// that has not been asked yet is only told what to click. Resolves to the state shown:
+// 'ready' | 'needs_permission' | 'denied' | 'unanswered'.
+function checkNativeAudio({ interactive = false } = {}) {
+  if (nativeCheck) return nativeCheck
+  const run = async () => {
+    const asked = nativeAsked()
+    if (!asked && !interactive) {
+      renderNativeAudioState('needs_permission')
+      return 'needs_permission'
+    }
+    renderNativeAudioState(asked ? 'checking' : 'asking')
+    let stream = null
+    let outcome = 'absent'
+    const opened = performance.now()
+    try {
+      stream = await openNativeSystemStream()
+      outcome = await settleNativeTrack(stream.getAudioTracks()[0], asked ? NATIVE_SETTLE_MS : NATIVE_ANSWER_WAIT_MS)
+      // A track that ends about a minute in was not refused by a person: macOS gave up on
+      // an unanswered window (and Chromium restarted its audio service). Still unanswered.
+      if (outcome === 'ended' && performance.now() - opened >= NATIVE_UNANSWERED_AFTER_MS) outcome = 'no_frames'
+    } catch (e) {
+      console.warn('[forgenotes] native call audio could not be opened:', (e && e.name) || '', (e && e.message) || e)
+    } finally {
+      if (stream) stream.getTracks().forEach((t) => t.stop())
+    }
+    // 'ok' and 'ended' are both answers from macOS; the window will not appear again.
+    if (outcome === 'ok' || outcome === 'ended') setNativeAsked(true)
+    const state = outcome === 'ok' ? 'ready' : outcome === 'no_frames' ? 'unanswered' : 'denied'
+    await diag(`system-audio: native check -> ${outcome} (${state})`)
+    renderNativeAudioState(state)
+    return state
+  }
+  nativeCheck = run().finally(() => { nativeCheck = null })
+  return nativeCheck
+}
+
+// A pre-record device check: is the mic live (with a level meter to prove it), will call
+// audio be captured (natively, or through a selected BlackHole input), and is there enough
+// disk for a long meeting? Informational — Start still works; capture errors also surface
+// on Start.
 function setPreflightRow(id, state, label, detail) {
   const panel = $('preflight-results')
   let row = document.getElementById(`pf-${id}`)
@@ -273,13 +438,19 @@ async function runPreflight() {
       audio: { deviceId: micId ? { exact: micId } : undefined, echoCancellation: false, noiseSuppression: false, autoGainControl: false },
     })
     startPreflightMeter(stream)
-    setPreflightRow('mic', 'ok', 'Microphone', 'Ready — speak and watch the level move.')
+    const micTrack = stream.getAudioTracks()[0]
+    const bluetooth = SA.looksLikeBluetoothMic({ label: micTrack && micTrack.label, sampleRate: micTrack && micTrack.getSettings().sampleRate })
+    if (bluetooth) setPreflightRow('mic', 'warn', 'Microphone', `Working. ${SA.BLUETOOTH_MIC_NOTE}`)
+    else setPreflightRow('mic', 'ok', 'Microphone', 'Ready — speak and watch the level move.')
   } catch (e) {
     setPreflightRow('mic', 'fail', 'Microphone', `Not available (${e.name || e.message}). Allow microphone access in System Settings → Privacy & Security → Microphone, then re-check.`)
   }
 
   if (captureProfile() === 'room_single_mic') {
-    setPreflightRow('system', 'ok', 'Recording setup', 'Room microphone only — BlackHole is not needed.')
+    setPreflightRow('system', 'ok', 'Recording setup', 'Room microphone only. Call audio is not recorded in this mode.')
+  } else if (systemAudioChoice().path === 'native') {
+    // macOS records the call audio itself. Never raises the macOS window from here.
+    await checkNativeAudio({ interactive: false })
   } else {
     // Call-audio source: the BlackHole (or chosen) input that carries the meeting audio.
     try {
@@ -290,7 +461,8 @@ async function runPreflight() {
       const selectedLabel = selected ? (inputs.find((d) => d.deviceId === selected)?.label || 'selected input') : ''
       if (selected) setPreflightRow('system', 'ok', 'Call audio source', `Capturing “${selectedLabel}” — route the meeting into it via a Multi-Output Device.`)
       else if (hasBlackhole) setPreflightRow('system', 'warn', 'Call audio source', 'BlackHole is available but not selected — pick it above to capture call audio.')
-      else setPreflightRow('system', 'warn', 'Call audio source', 'No system-audio source — install BlackHole 2ch (see README) to capture call audio.')
+      else if (systemAudioChoice().nativeSupported) setPreflightRow('system', 'warn', 'Call audio source', 'BlackHole 2ch is not installed. Set “Call audio capture” to “Built into macOS” to record calls without it.')
+      else setPreflightRow('system', 'warn', 'Call audio source', `No system-audio source. On this version of macOS, call audio needs BlackHole 2ch (the README has the steps); macOS ${systemAudioInfo.nativeMinVersion} and later do not need it.`)
     } catch {
       setPreflightRow('system', 'warn', 'Call audio source', 'Could not check the system-audio source.')
     }
@@ -601,19 +773,32 @@ function bankSegment(track, blob, startOffsetMs, durationMs) {
   return writing
 }
 
+function streamIsLive(stream) {
+  return Boolean(stream && stream.getAudioTracks().some((t) => t.readyState === 'live'))
+}
+
+// A stream whose track has ended (device unplugged, capture refused) cannot be recorded:
+// that track simply has no segment until the stream is reopened (see reacquireTrack).
 function startTrackSegment(track, stream) {
-  if (!stream) return null
+  if (!streamIsLive(stream)) return null
   const chunks = []
   const startOffsetMs = elapsedMs()
-  const recorder = new MediaRecorder(stream, rec.mime ? { mimeType: rec.mime } : undefined)
-  recorder.ondataavailable = (e) => {
-    if (e.data && e.data.size) chunks.push(e.data)
+  let recorder
+  try {
+    recorder = new MediaRecorder(stream, rec.mime ? { mimeType: rec.mime } : undefined)
+    recorder.ondataavailable = (e) => {
+      if (e.data && e.data.size) chunks.push(e.data)
+    }
+    // Also runs when the track ends by itself: what was captured up to then is kept.
+    recorder.onstop = () => {
+      const blob = new Blob(chunks, { type: rec ? rec.mime : 'audio/webm' })
+      if (blob.size && rec) bankSegment(track, blob, startOffsetMs, Math.max(0, elapsedMs() - startOffsetMs))
+    }
+    recorder.start(1000)
+  } catch (e) {
+    void diag(`capture: could not start a ${track} segment (${(e && e.message) || e})`)
+    return null
   }
-  recorder.onstop = () => {
-    const blob = new Blob(chunks, { type: rec ? rec.mime : 'audio/webm' })
-    if (blob.size && rec) bankSegment(track, blob, startOffsetMs, Math.max(0, elapsedMs() - startOffsetMs))
-  }
-  recorder.start(1000)
   return { recorder, chunks, startOffsetMs }
 }
 
@@ -645,27 +830,59 @@ function flushSegment(key, track) {
   })
 }
 
+// ---------------------------------------------------------------- opening the streams
+function openMicStream(deviceId) {
+  return navigator.mediaDevices.getUserMedia({
+    audio: { deviceId: deviceId ? { exact: deviceId } : undefined, ...RAW_AUDIO },
+  })
+}
+
+// One of the two paths, never both: a native capture is a display-media stream, a BlackHole
+// capture is an ordinary audio input.
+function openSystemStream(path, deviceId) {
+  if (path === 'native') return openNativeSystemStream()
+  return navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: deviceId }, ...RAW_AUDIO } })
+}
+
 async function startRecording() {
+  if (rec || starting) return
+  starting = true
+  try {
+    await beginRecording()
+  } finally {
+    starting = false
+  }
+}
+
+async function beginRecording() {
   setStatus('', null)
   showAnnounceNote(false)
+  setCaptureNote(null)
   stopAnnounceClip() // a voice preview must not run into the recording
   hide('open-link')
   stopLocalPlayback()
   stopPreflightMeter() // release the preflight mic before opening the recording streams
   const micId = $('mic').value
   const profile = captureProfile()
-  const systemId = profile === 'remote_dual_track' && $('system-source') ? $('system-source').value : ''
+  const systemPath = profile === 'remote_dual_track' ? systemAudioChoice().path : 'none'
+  const systemId = systemPath === 'blackhole' && $('system-source') ? $('system-source').value : ''
+
+  // Native call audio that macOS has not been asked about yet: ask now, while no stream is
+  // open. The macOS window blocks Chromium's audio service until it is answered, so it must
+  // never be raised underneath a running microphone capture.
+  let nativeState = null
+  if (systemPath === 'native') {
+    if (nativeCheck) await nativeCheck
+    if (!nativeAsked()) {
+      setStatus('macOS is asking for permission to record call audio. Choose Allow in the macOS window.', 'busy')
+      nativeState = await checkNativeAudio({ interactive: true })
+      setStatus('', null)
+    }
+  }
 
   let micStream
   try {
-    micStream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        deviceId: micId ? { exact: micId } : undefined,
-        echoCancellation: false,
-        noiseSuppression: false,
-        autoGainControl: false,
-      },
-    })
+    micStream = await openMicStream(micId)
   } catch (e) {
     setStatus(`Could not open the microphone: ${e.message}`, 'error')
     return
@@ -673,16 +890,33 @@ async function startRecording() {
 
   let systemStream = null
   let warning = null
-  if (systemId) {
+  if (systemPath === 'native') {
+    if (!nativeAsked()) {
+      // macOS has still not answered (the window was left open, or the capture could not be
+      // requested at all). Opening it again would raise the window under the running
+      // microphone, so this recording is microphone only.
+      warning = `Only your microphone is being recorded. ${SA.nativePermissionCopy(nativeState === 'denied' ? 'denied' : 'unanswered').text}`
+    } else {
+      try {
+        systemStream = await openSystemStream('native')
+        const track = systemStream.getAudioTracks()[0]
+        const settled = await settleNativeTrack(track, 1500)
+        console.log('[forgenotes] system-audio (native) track:', track && track.label, settled, track && track.getSettings())
+        if (settled === 'ended') {
+          systemStream.getTracks().forEach((t) => t.stop())
+          systemStream = null
+          renderNativeAudioState('denied')
+          warning = SA.healthMessage({ kind: 'system', health: 'ended', path: 'native' }).text
+        }
+      } catch (e) {
+        systemStream = null
+        warning = SA.healthMessage({ kind: 'system', health: 'absent', path: 'native' }).text
+        console.error('[forgenotes] native system audio failed:', e)
+      }
+    }
+  } else if (systemPath === 'blackhole' && systemId) {
     try {
-      systemStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          deviceId: { exact: systemId },
-          echoCancellation: false,
-          noiseSuppression: false,
-          autoGainControl: false,
-        },
-      })
+      systemStream = await openSystemStream('blackhole', systemId)
       const track = systemStream.getAudioTracks()[0]
       console.log('[forgenotes] system-audio (BlackHole) track:', track && track.label, track && track.getSettings())
     } catch (e) {
@@ -690,7 +924,7 @@ async function startRecording() {
       warning = `Could not open the system-audio device (${e.name}: ${e.message}) — recording mic only. Is BlackHole installed and selected?`
       console.error('[forgenotes] system getUserMedia failed:', e)
     }
-  } else if (profile === 'remote_dual_track') {
+  } else if (systemPath === 'blackhole') {
     warning = 'No system-audio source selected — recording mic only. Pick BlackHole 2ch to capture the meeting.'
   }
 
@@ -698,6 +932,9 @@ async function startRecording() {
   rec = {
     micStream,
     systemStream,
+    micId,
+    systemPath, // 'native' | 'blackhole' | 'none' (room microphone)
+    systemId,
     mime: mime || 'audio/webm',
     startedAt: Date.now(),
     pausedMs: 0,
@@ -710,6 +947,7 @@ async function startRecording() {
       visibility: $('visibility').value,
       template_key: $('template').value,
       tags: $('tags').value,
+      system_audio_path: systemPath, // kept in the local meta.json for support; not uploaded
     },
     mic: null,
     system: null,
@@ -721,6 +959,21 @@ async function startRecording() {
     timer: null,
     meters: null,
     stopping: false,
+    // capture watch (see startCaptureWatch)
+    watchTimer: null,
+    levelCtx: null,
+    levelNodes: {},
+    levels: {},
+    heard: { mic: false, system: false },
+    openedAt: { mic: Date.now(), system: Date.now() },
+    health: { mic: 'starting', system: systemStream ? 'starting' : 'absent' },
+    hadSystemStream: Boolean(systemStream),
+    levelWatched: false,
+    startWarning: warning, // why call audio was missing from the first second, if it was
+    reacquiring: {},
+    gaveUp: {},
+    outputLabel: null,
+    outputNote: null,
   }
   rec.mic = startTrackSegment('mic', micStream)
   rec.system = startTrackSegment('system', systemStream)
@@ -732,20 +985,12 @@ async function startRecording() {
   // Fire-and-forget: it must never delay or endanger the recording.
   if (announceEnabled()) void announceRecording(rec)
 
-  if (warning) setStatus(warning, 'warn')
-
   // Persistent capture status + live meters — the "Call audio" bar moving means the
   // meeting is actually being captured; flat means mic-only.
-  const sysEl = $('cap-system')
-  if (profile === 'room_single_mic') {
-    sysEl.textContent = 'Room microphone only'
-    sysEl.className = 'cap ok'
-  } else {
-    sysEl.textContent = systemStream ? 'Call audio: capturing' : 'Call audio: NOT captured — mic only'
-    sysEl.className = systemStream ? 'cap ok' : 'cap bad'
-  }
   rec.meters = setupMeters(micStream, systemStream)
   show('meters')
+  renderCaptureHealth(rec)
+  startCaptureWatch(rec)
   // Fire-and-forget: captions must never delay or endanger the recording.
   if (window.fnLive) window.fnLive.start({ micStream, systemStream })
 
@@ -753,10 +998,230 @@ async function startRecording() {
   $('pause-btn').classList.remove('hidden')
   $('stop-btn').classList.remove('hidden')
   $('signout-btn').disabled = true
+  $('system-audio-pref').disabled = true // the path of a running recording cannot change
   setAnnouncePreviewDisabled(true)
   show('rec-indicator')
   rec.timer = setInterval(updateTimer, 500)
   updateTimer()
+}
+
+// ---------------------------------------------------------------- capture watch
+// While a recording runs, both tracks are watched so that a dead or silent one is reported
+// during the meeting, when it can still be fixed, and a track that ends (output device
+// changed, headset disconnected, audio service restarted) is reopened and recording goes on
+// in a new segment. Levels come from level-worklet.js on the audio thread, so this keeps
+// working while the window is in the background.
+function setCaptureNote(message) {
+  const el = $('capture-note')
+  if (!message) {
+    el.classList.add('hidden')
+    el.textContent = ''
+    return
+  }
+  el.textContent = message.text
+  el.className = `msg ${message.level === 'error' ? 'error' : 'warn'}`
+}
+
+function watchedKinds(current) {
+  return current.systemPath === 'none' ? ['mic'] : ['mic', 'system']
+}
+
+function attachLevelTap(current, kind) {
+  for (const node of current.levelNodes[kind] || []) { try { node.disconnect() } catch { /* torn down */ } }
+  current.levelNodes[kind] = []
+  current.levels[kind] = null
+  const stream = current[`${kind}Stream`]
+  if (!current.levelCtx || !streamIsLive(stream)) return
+  const monitor = SA.createLevelMonitor()
+  const source = current.levelCtx.createMediaStreamSource(stream)
+  const tap = new AudioWorkletNode(current.levelCtx, 'fn-level-tap', { numberOfOutputs: 0 })
+  tap.port.onmessage = (event) => {
+    monitor.push(event.data)
+    if (event.data.peak >= SA.SILENCE_PEAK) current.heard[kind] = true
+  }
+  source.connect(tap)
+  current.levelNodes[kind] = [source, tap]
+  current.levels[kind] = monitor
+}
+
+function watchTrackEnd(current, kind) {
+  const stream = current[`${kind}Stream`]
+  const track = stream && stream.getAudioTracks()[0]
+  if (!track) return
+  track.addEventListener('ended', () => {
+    if (rec === current && !current.stopping) checkCaptureHealth()
+  })
+}
+
+async function defaultOutputLabel() {
+  try {
+    const outputs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'audiooutput')
+    const chosen = outputs.find((d) => d.deviceId === 'default') || outputs[0]
+    return chosen ? String(chosen.label || '').replace(/^Default\s*-\s*/i, '') : ''
+  } catch {
+    return ''
+  }
+}
+
+function startCaptureWatch(current) {
+  for (const kind of watchedKinds(current)) watchTrackEnd(current, kind)
+  current.watchTimer = setInterval(checkCaptureHealth, 1000)
+  void defaultOutputLabel().then((label) => { current.outputLabel = label })
+  void (async () => {
+    try {
+      const ctx = new AudioContext()
+      await ctx.audioWorklet.addModule('level-worklet.js')
+      if (rec !== current || current.stopping) {
+        ctx.close().catch(() => {})
+        return
+      }
+      if (ctx.state === 'suspended') ctx.resume().catch(() => {})
+      current.levelCtx = ctx
+      current.levelWatched = true
+      for (const kind of watchedKinds(current)) attachLevelTap(current, kind)
+    } catch (e) {
+      // Without levels the recording still runs and ended tracks are still noticed; only
+      // the "silent" warnings are lost.
+      await diag(`capture: level watch unavailable (${(e && e.message) || e})`)
+    }
+  })()
+}
+
+function stopCaptureWatch(current) {
+  clearInterval(current.watchTimer)
+  current.watchTimer = null
+  if (current.levelCtx) current.levelCtx.close().catch(() => {})
+  current.levelCtx = null
+  current.levelNodes = {}
+}
+
+function checkCaptureHealth() {
+  const current = rec
+  if (!current || current.stopping) return
+  for (const kind of watchedKinds(current)) {
+    const stream = current[`${kind}Stream`]
+    const track = stream ? stream.getAudioTracks()[0] : null
+    const level = current.levels[kind] ? current.levels[kind].snapshot() : null
+    const health = SA.trackHealth({
+      kind,
+      hasTrack: Boolean(track),
+      readyState: track ? track.readyState : 'ended',
+      deliveredFrames: track ? deliveredFrames(track) : null,
+      level,
+      elapsedMs: Date.now() - current.openedAt[kind],
+    })
+    if (health !== current.health[kind]) {
+      current.health[kind] = health
+      const peak = level && Number.isFinite(level.maxPeakDb) ? `, peak ${level.maxPeakDb.toFixed(1)} dBFS` : ''
+      void diag(`capture: ${kind} track is ${health} (${kind === 'system' ? current.systemPath : 'microphone'}${peak})`)
+    }
+    if (health === 'ended' && !current.reacquiring[kind] && !current.gaveUp[kind]) void reacquireTrack(current, kind)
+  }
+  renderCaptureHealth(current)
+}
+
+function renderCaptureHealth(current) {
+  const sysEl = $('cap-system')
+  let systemMessage = null
+  if (current.systemPath === 'none') {
+    sysEl.textContent = 'Room microphone only'
+    sysEl.className = 'cap ok'
+  } else {
+    const health = current.health.system
+    const lost = health === 'absent' || health === 'ended' || health === 'no_frames'
+    sysEl.textContent = lost ? 'Call audio: NOT captured — mic only' : health === 'silent' ? 'Call audio: nothing heard yet' : 'Call audio: capturing'
+    sysEl.className = lost || health === 'silent' ? 'cap bad' : 'cap ok'
+    systemMessage = current.reacquiring.system
+      ? { level: 'warn', text: 'Call audio stopped. ForgeNotes is reconnecting it; your microphone is still being recorded.' }
+      : health === 'absent' && current.startWarning
+        ? { level: 'error', text: current.startWarning }
+        : SA.healthMessage({ kind: 'system', health, path: current.systemPath })
+  }
+  // One note at a time, the most serious first: a dead microphone, then lost call audio,
+  // then a changed sound output.
+  setCaptureNote(SA.healthMessage({ kind: 'mic', health: current.health.mic }) || systemMessage || current.outputNote)
+}
+
+// Puts a newly opened stream in the place of one that ended and continues recording that
+// track in a new segment. The time between the two segments is kept as a gap (segments
+// carry their own start offsets), never closed up.
+function adoptStream(current, kind, stream) {
+  const old = current[`${kind}Stream`]
+  if (old) old.getTracks().forEach((t) => t.stop())
+  current[`${kind}Stream`] = stream
+  current.openedAt[kind] = Date.now()
+  if (kind === 'system') current.hadSystemStream = true
+  watchTrackEnd(current, kind)
+  const segment = current[kind]
+  if (segment && segment.recorder.state !== 'inactive') segment.recorder.stop()
+  current[kind] = startTrackSegment(kind, stream)
+  if (current.paused && current[kind]) current[kind].recorder.pause()
+  attachLevelTap(current, kind)
+  if (current.meters) current.meters.stop()
+  current.meters = setupMeters(current.micStream, current.systemStream)
+}
+
+async function reacquireTrack(current, kind) {
+  if (current.reacquiring[kind]) return
+  current.reacquiring[kind] = true
+  let reopened = false
+  try {
+    for (let attempt = 0; attempt < REACQUIRE_DELAYS_MS.length; attempt++) {
+      await sleep(REACQUIRE_DELAYS_MS[attempt])
+      if (rec !== current || current.stopping) return
+      let stream = null
+      try {
+        // The last microphone attempt lets macOS pick: the chosen device may be gone.
+        if (kind === 'mic') stream = await openMicStream(attempt < REACQUIRE_DELAYS_MS.length - 1 ? current.micId : '')
+        else if (current.systemPath === 'native' || current.systemId) stream = await openSystemStream(current.systemPath, current.systemId)
+        if (stream && kind === 'system' && current.systemPath === 'native') {
+          if ((await settleNativeTrack(stream.getAudioTracks()[0], 1500)) === 'ended') {
+            stream.getTracks().forEach((t) => t.stop())
+            stream = null
+          }
+        }
+      } catch (e) {
+        await diag(`capture: reopening ${kind} failed on attempt ${attempt + 1} (${(e && e.name) || ''} ${(e && e.message) || e})`)
+        stream = null
+      }
+      if (!stream) continue
+      if (rec !== current || current.stopping) {
+        stream.getTracks().forEach((t) => t.stop())
+        return
+      }
+      adoptStream(current, kind, stream)
+      reopened = true
+      await diag(`capture: ${kind} reopened on attempt ${attempt + 1}; recording continues in a new segment`)
+      return
+    }
+  } finally {
+    current.reacquiring[kind] = false
+    if (!reopened && rec === current && !current.stopping) {
+      current.gaveUp[kind] = true // a later device change tries again
+      void diag(`capture: ${kind} could not be reopened`)
+    }
+    if (rec === current && !current.stopping) checkCaptureHealth()
+  }
+}
+
+// Headset connected or removed, sound output switched. Native capture: Chromium moves its
+// tap to the new output by itself, and the watch above reopens the track if that fails.
+// BlackHole: the call only reaches BlackHole through the Multi-Output Device, so say so
+// when the output moves away from it.
+async function onAudioDevicesChanged() {
+  const current = rec
+  if (!current || current.stopping) return
+  const label = await defaultOutputLabel()
+  if (rec !== current || current.stopping) return
+  if (label !== current.outputLabel) {
+    await diag(`capture: sound output changed from "${current.outputLabel || ''}" to "${label}" (${current.systemPath})`)
+    current.outputLabel = label
+    current.outputNote = current.systemPath === 'blackhole' && label && !SA.outputFeedsBlackhole(label)
+      ? { level: 'warn', text: `Your Mac’s sound output changed to “${label}”. Call audio is only recorded while the output is the Multi-Output Device that includes BlackHole 2ch. Watch the Call audio bar, and switch the output back if it stops moving.` }
+      : null
+  }
+  current.gaveUp = {} // a device came or went: an ended track is worth another try
+  setTimeout(checkCaptureHealth, 1500) // let macOS finish switching before judging
 }
 
 function togglePause() {
@@ -802,6 +1267,14 @@ async function stopRecording() {
   if (window.fnLive) window.fnLive.stop()
   clearInterval(rec.rotateTimer)
   clearInterval(rec.timer)
+  // Read before the watch is torn down: did the call-audio track ever carry sound?
+  // No call audio in the finished recording: there never was a track, the track was lost
+  // or never fed, or it ran for a while and stayed silent.
+  const systemLost = ['absent', 'ended', 'no_frames'].includes(rec.health.system)
+  const noCallAudio = rec.systemPath !== 'none' && !rec.heard.system &&
+    (!rec.hadSystemStream || systemLost || (rec.levelWatched && elapsedMs() >= SA.FINAL_SILENCE_MIN_MS))
+  const systemPathUsed = rec.systemPath
+  stopCaptureWatch(rec)
   if (rec.meters) rec.meters.stop()
   hide('meters')
   hide('rec-indicator')
@@ -837,6 +1310,13 @@ async function stopRecording() {
     return
   }
   setStatus('Saved on this device. Play it below, open its folder, or choose Upload & transcribe.', 'ok')
+  // Said once more at the end, where it stays on screen: a recording with no call audio.
+  if (noCallAudio) {
+    setCaptureNote({ level: 'warn', text: SA.noCallAudioSummary(systemPathUsed) })
+    await diag(`capture: recording ${localId} ended with no call audio (${systemPathUsed})`)
+  } else {
+    setCaptureNote(null)
+  }
   if ($('auto-upload').checked && auth) await retryPending(localId, $('stop-btn'))
 
 }
@@ -844,6 +1324,7 @@ async function stopRecording() {
 function resetControls() {
   $('start-btn').classList.remove('hidden')
   $('signout-btn').disabled = false
+  $('system-audio-pref').disabled = false
   setAnnouncePreviewDisabled(false)
 }
 
@@ -1258,6 +1739,16 @@ function wireEvents() {
   $('preflight-btn').onclick = runPreflight
   $('mic').onchange = () => { if (!rec) runPreflight() }
   if ($('system-source')) $('system-source').onchange = () => { if (!rec) runPreflight() }
+  // Call audio: the one setting, the permission step, and the way to the macOS pane.
+  $('system-audio-pref').onchange = (e) => {
+    try { localStorage.setItem(SYSTEM_AUDIO_PREF_KEY, SA.normalizePreference(e.target.value)) } catch { /* applies to this session only */ }
+    renderSystemAudioFields()
+    setCaptureProfile(captureProfile(), { syncSource: false })
+  }
+  $('native-audio-allow').onclick = () => { if (!rec && !starting) void checkNativeAudio({ interactive: true }) }
+  $('native-audio-settings').onclick = () => { void window.desktop.openSystemAudioSettings() }
+  navigator.mediaDevices.addEventListener('devicechange', () => { void onAudioDevicesChanged() })
+  renderSystemAudioFields()
   $('mode-online').onclick = () => setCaptureProfile('remote_dual_track')
   $('mode-room').onclick = () => setCaptureProfile('room_single_mic')
   $('source').onchange = () => setCaptureProfile($('source').value === 'in_person' ? 'room_single_mic' : 'remote_dual_track', { syncSource: false })

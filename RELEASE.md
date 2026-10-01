@@ -29,7 +29,7 @@ Manual dispatch defaults to a draft and creates `v<package.json version>` at the
 
 The Mac runner imports the Developer ID certificate into a temporary keychain, builds the universal app, submits to Apple's notarization service and verifies trust. Do not distribute an unsigned fallback if signing or notarization fails. A Mac App Store launch would require a separate MAS build/provisioning/submission workflow, which this repository does not implement.
 
-The draft must contain `ForgeNotes-Recorder.dmg`, its checksum, `ForgeNotes-Recorder.zip`, `latest-mac.yml` and generated blockmaps. The ZIP and YAML are required for automatic updates; a DMG alone is insufficient. Complete [SECURITY_RELEASE_QA.md](SECURITY_RELEASE_QA.md) on the exact artifacts, including physical BlackHole/microphone capture and captions. Then replace VERSION with the new package version:
+The draft must contain `ForgeNotes-Recorder.dmg`, its checksum, `ForgeNotes-Recorder.zip`, `latest-mac.yml` and generated blockmaps. The ZIP and YAML are required for automatic updates; a DMG alone is insufficient. Complete [SECURITY_RELEASE_QA.md](SECURITY_RELEASE_QA.md) on the exact artifacts, including physical microphone capture, call-audio capture on both paths (native on macOS 14.2 or newer, including the first-run permission window; BlackHole on macOS 12.0 to 14.1 or with the setting) and captions. Then replace VERSION with the new package version:
 
 ```sh
 gh release edit vVERSION --repo fecktk1/forgenotes-recorder-mac --draft=false --latest
@@ -47,6 +47,7 @@ npm ci
 npm run verify
 npm test
 npm run test:media-runtime
+npm run test:recorder-ui
 npm run dist:mac
 ```
 

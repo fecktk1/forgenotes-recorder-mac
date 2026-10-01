@@ -18,8 +18,16 @@ const required = [
 for (const [source, token] of required) {
   if (!source.includes(token)) throw new Error(`missing recorder contract: ${token}`)
 }
-if (!app.includes("profile === 'remote_dual_track' && $('system-source')")) {
+// Room mode records no call audio, whichever way this Mac would capture it.
+if (!app.includes("const systemPath = profile === 'remote_dual_track' ? systemAudioChoice().path : 'none'")) {
   throw new Error('room mode must disable macOS system capture')
+}
+// Call audio: both paths have their controls, and the native one is audio only.
+for (const token of ['id="native-audio-fields"', 'id="blackhole-fields"', 'id="system-audio-pref"', 'id="native-audio-allow"', 'id="capture-note"']) {
+  if (!html.includes(token)) throw new Error(`missing recorder contract: ${token}`)
+}
+if (!app.includes('getDisplayMedia({ audio: { ...RAW_AUDIO }, video: false })')) {
+  throw new Error('native call audio must be requested as audio only (no screen capture)')
 }
 if (app.split('announceRecording(').length !== 3) {
   throw new Error('the recording announcement must be fired from exactly one place (a fresh start)')
