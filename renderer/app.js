@@ -9,10 +9,17 @@ const hide = (id) => $(id).classList.add('hidden')
 
 const ROTATE_MS = 60 * 1000 // segment length — keeps each uploaded file small
 
+// Spoken once through the default audio output when a recording starts.
+const ANNOUNCE_TEXT = 'This meeting is being recorded.'
+const ANNOUNCE_KEY = 'fn_announce_recording' // localStorage: 'false' = off, anything else = on
+const ANNOUNCE_VOICE_WAIT_MS = 1000 // voices can still be loading on a cold start
+const ANNOUNCE_START_TIMEOUT_MS = 5000 // speech never started — tell the user
+
 let CFG = null
 let auth = null // { access_token, refresh_token, expires_at(ms), email }
 let rec = null // active recording state
 let preflightMeter = null // live mic meter used by the pre-record device check
+let announceUtterance = null // held so the utterance isn't garbage-collected mid-speech
 
 // ---------------------------------------------------------------- boot
 async function boot() {
@@ -172,15 +179,26 @@ function setCaptureProfile(profile, { syncSource = true, check = true } = {}) {
   $('mode-hint').textContent = room
     ? 'Uses one microphone for everyone in the room and separates speakers during transcription.'
     : 'Captures your microphone and BlackHole call audio as separate tracks.'
-  $('consent-copy').textContent = room
-    ? '🔴 Recording captures everyone in the room. Place the microphone near the center and make sure all participants consent.'
-    : '🔴 Recording captures your mic and (if enabled) everyone on the call. Make sure participants consent before you start.'
+  renderConsentCopy()
   if (syncSource) {
     if (room) $('source').value = 'in_person'
     else if ($('source').value === 'in_person') $('source').value = 'other'
   }
   localStorage.setItem('forgenotes_capture_profile', room ? 'room_single_mic' : 'remote_dual_track')
   if (check && !rec) runPreflight()
+}
+
+// The consent line has to stay truthful: it only promises the spoken notice while the
+// "Announce recording aloud" setting is on.
+function renderConsentCopy() {
+  const room = captureProfile() === 'room_single_mic'
+  const base = room
+    ? '🔴 Recording captures everyone in the room. Place the microphone near the center and make sure all participants consent.'
+    : '🔴 Recording captures your mic and (if enabled) everyone on the call. Make sure participants consent before you start.'
+  const spoken = room
+    ? ` ForgeNotes will say “${ANNOUNCE_TEXT}” when you start — people in the room only hear it if your speakers are on.`
+    : ` ForgeNotes will say “${ANNOUNCE_TEXT}” when you start — people on a call only hear it if your speakers are on.`
+  $('consent-copy').textContent = announceEnabled() ? base + spoken : base
 }
 
 // A pre-record device check: is the mic live (with a level meter to prove it), is the
@@ -393,6 +411,95 @@ function setupMeters(micStream, systemStream) {
   }
 }
 
+// ---------------------------------------------------------------- recording announcement
+// Says "This meeting is being recorded." aloud, once, through the computer's default audio
+// output right after capture has started, so the notice itself lands in the recording.
+// It uses the built-in Web Speech API: nothing to install, no audio driver, no virtual
+// microphone. People on a call only hear it when the speakers (not headphones) are on.
+// It is never awaited and every failure is swallowed — the announcement must never delay
+// or break a recording.
+function announceEnabled() {
+  const box = $('announce-recording')
+  return box ? box.checked : true
+}
+
+function showAnnounceNote(visible) {
+  const el = $('announce-note')
+  if (el) el.classList.toggle('hidden', !visible)
+}
+
+// Prefer an installed en-US voice, then any en-US voice, then any English voice. With no
+// match the utterance keeps lang=en-US and the platform picks its own default.
+function announcementVoice(synth) {
+  let voices = []
+  try { voices = synth.getVoices() || [] } catch { /* treat as no voices */ }
+  const lang = (v) => String(v.lang || '').replace('_', '-').toLowerCase()
+  return (
+    voices.find((v) => lang(v) === 'en-us' && v.localService) ||
+    voices.find((v) => lang(v) === 'en-us') ||
+    voices.find((v) => lang(v).startsWith('en')) ||
+    null
+  )
+}
+
+// Chromium fills the voice list asynchronously. Resolve as soon as it is populated
+// (voiceschanged) or after a short wait, whichever comes first. Recording is already
+// running by the time this is called, so the wait delays only the announcement.
+function announcementVoicesReady(synth) {
+  return new Promise((resolve) => {
+    let loaded = false
+    try { loaded = synth.getVoices().length > 0 } catch { /* fall through to the wait */ }
+    if (loaded) return resolve()
+    let timer = 0
+    const done = () => {
+      clearTimeout(timer)
+      try { synth.removeEventListener('voiceschanged', done) } catch { /* ignore */ }
+      resolve()
+    }
+    timer = setTimeout(done, ANNOUNCE_VOICE_WAIT_MS)
+    try { synth.addEventListener('voiceschanged', done) } catch { /* the timeout still resolves */ }
+  })
+}
+
+async function announceRecording(current) {
+  let watchdog = 0
+  const failed = (why) => {
+    clearTimeout(watchdog)
+    console.warn('[forgenotes] recording announcement did not play:', why)
+    if (rec === current) showAnnounceNote(true)
+  }
+  try {
+    const synth = window.speechSynthesis
+    if (!synth || typeof window.SpeechSynthesisUtterance !== 'function') {
+      failed('speech synthesis is unavailable')
+      return
+    }
+    await announcementVoicesReady(synth)
+    if (rec !== current || current.stopping) return // stopped before it could be said
+    const utterance = new SpeechSynthesisUtterance(ANNOUNCE_TEXT)
+    utterance.lang = 'en-US'
+    utterance.rate = 0.95
+    utterance.volume = 1
+    const voice = announcementVoice(synth)
+    if (voice) utterance.voice = voice
+    utterance.onstart = () => clearTimeout(watchdog)
+    utterance.onend = () => {
+      clearTimeout(watchdog)
+      if (announceUtterance === utterance) announceUtterance = null
+    }
+    utterance.onerror = (e) => {
+      if (announceUtterance === utterance) announceUtterance = null
+      failed((e && e.error) || 'speech error')
+    }
+    announceUtterance = utterance
+    if (synth.speaking || synth.pending) synth.cancel() // clear anything stuck in the queue
+    watchdog = setTimeout(() => failed('speech did not start'), ANNOUNCE_START_TIMEOUT_MS)
+    synth.speak(utterance)
+  } catch (e) {
+    failed((e && e.message) || e)
+  }
+}
+
 // ---------------------------------------------------------------- segmented recording
 // One MediaRecorder per track per segment. On stop (rotation or final), its onstop
 // pushes the completed, independently-decodable webm blob to rec.segments.
@@ -462,6 +569,7 @@ function flushSegment(key, track) {
 
 async function startRecording() {
   setStatus('', null)
+  showAnnounceNote(false)
   hide('open-link')
   stopLocalPlayback()
   stopPreflightMeter() // release the preflight mic before opening the recording streams
@@ -538,6 +646,12 @@ async function startRecording() {
   rec.mic = startTrackSegment('mic', micStream)
   rec.system = startTrackSegment('system', systemStream)
   rec.rotateTimer = setInterval(rotate, ROTATE_MS)
+
+  // Capture is live — say the notice now so it is part of the recording. Only here, on a
+  // fresh start: resuming from pause and segment rotation never repeat it. This runs well
+  // after stopLocalPlayback() above, which only touches the saved-recording player.
+  // Fire-and-forget: it must never delay or endanger the recording.
+  if (announceEnabled()) void announceRecording(rec)
 
   if (warning) setStatus(warning, 'warn')
 
@@ -1039,6 +1153,17 @@ function wireEvents() {
 
   $('auto-upload').checked = localStorage.getItem('fn_auto_upload') === 'true'
   $('auto-upload').onchange = (e) => localStorage.setItem('fn_auto_upload', String(e.target.checked))
+  // "Announce recording aloud" — on unless the user switched it off. Set before
+  // setCaptureProfile() below so the consent line renders with the right wording.
+  let announceOn = true
+  try { announceOn = localStorage.getItem(ANNOUNCE_KEY) !== 'false' } catch { /* storage unavailable: stay on */ }
+  $('announce-recording').checked = announceOn
+  $('announce-recording').onchange = (e) => {
+    try { localStorage.setItem(ANNOUNCE_KEY, String(e.target.checked)) } catch { /* applies to this session only */ }
+    renderConsentCopy()
+  }
+  // Ask for the voice list now so it has loaded by the time recording starts.
+  try { if (window.speechSynthesis) window.speechSynthesis.getVoices() } catch { /* announcement is optional */ }
   $('local-record-btn').onclick = enterRecorder
   $('signout-btn').onclick = signOut
   $('start-btn').onclick = startRecording

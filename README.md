@@ -32,6 +32,10 @@ level meter before recording.
 Choose **Online call** for Zoom, Meet, Discord, and similar calls. Call audio uses the following
 one-time BlackHole setup.
 
+With **Announce recording aloud** on (the default), the app says “This meeting is being recorded.”
+once through the Mac's default audio output right after capture starts. It is not injected into the
+call: remote participants only hear it if your speakers are on. Resuming from pause does not repeat it.
+
 ## One-time online-call audio setup
 
 1. Install BlackHole:
