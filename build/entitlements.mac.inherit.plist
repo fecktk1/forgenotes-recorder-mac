@@ -2,9 +2,11 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <!-- Applied to the Electron helper processes (Renderer, GPU, Plugin). The renderer is
-       the process that actually runs V8 and calls getUserMedia, so it needs the same
-       grants as the main bundle. Deliberately NOT including com.apple.security.inherit:
+  <!-- Applied to the Electron helper processes (Renderer, GPU, Plugin, and the plain
+       Helper that runs Chromium's audio service). The renderer runs V8 and calls
+       getUserMedia; the audio service is the process that opens the microphone and, on
+       macOS 14.2 and later, the Core Audio tap for call audio. Both need the same grants
+       as the main bundle. Deliberately NOT including com.apple.security.inherit:
        that is an App Sandbox key, and this is a Developer ID build with Hardened Runtime
        but no sandbox. Including it makes codesign fail. -->
   <key>com.apple.security.cs.allow-jit</key>

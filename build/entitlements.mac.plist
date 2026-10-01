@@ -14,11 +14,14 @@
   <key>com.apple.security.cs.allow-dyld-environment-variables</key>
   <true/>
 
-  <!-- Microphone. NSMicrophoneUsageDescription in Info.plist controls the wording of the
-       prompt; this entitlement is what actually permits capture under Hardened Runtime.
-       Without it the TCC prompt never appears and getUserMedia fails. Covers both the
-       mic and the BlackHole 2ch input used for call audio — macOS treats both as audio
-       input devices. -->
+  <!-- Audio capture. This entitlement is what permits recording under Hardened Runtime;
+       without it the permission prompt never appears and capture fails. It covers all three
+       sources the recorder uses: the microphone (wording from NSMicrophoneUsageDescription),
+       the BlackHole 2ch input on macOS 12.0 to 14.1 (an audio input device like any other),
+       and the native call-audio capture on macOS 14.2 and later (a Core Audio tap; wording
+       from NSAudioCaptureUsageDescription, listed in System Settings under "System Audio
+       Recording Only"). Native call audio needs no further entitlement, and none for
+       screen capture: the app never asks for a video source. -->
   <key>com.apple.security.device.audio-input</key>
   <true/>
 </dict>

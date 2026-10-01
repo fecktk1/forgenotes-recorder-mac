@@ -96,9 +96,9 @@
 
           <div id="first-run" class="first-run hidden">
             <p><strong>First time?</strong> Pick <em>Online call</em> to capture both sides of a
-            meeting (via BlackHole) or <em>In person</em> for the room mic. Recordings upload when
-            you stop, become transcripts and notes in a few minutes, and live in the same library
-            as your iPhone and web captures.</p>
+            meeting or <em>In person</em> for the room mic. <span id="first-run-audio"></span>
+            Recordings upload when you stop, become transcripts and notes in a few minutes, and
+            live in the same library as your iPhone and web captures.</p>
             <button id="first-run-dismiss" class="btn ghost small" type="button">Got it</button>
           </div>
 
@@ -108,7 +108,7 @@
               <button id="mode-online" class="mode-option active" type="button">Online call</button>
               <button id="mode-room" class="mode-option" type="button">In person / room</button>
             </div>
-            <p id="mode-hint" class="hint">Captures your microphone and BlackHole call audio as separate tracks.</p>
+            <p id="mode-hint" class="hint">Captures your microphone and the call audio as separate tracks.</p>
           </div>
 
           <div class="grid2">
@@ -147,13 +147,38 @@
           </label>
 
           <div id="system-audio-fields">
-            <label class="field">
-              <span>System audio source</span>
-              <select id="system-source"></select>
+            <!-- macOS 14.2 and later: call audio is recorded by macOS itself. Nothing to
+                 install or route; macOS asks for permission once. -->
+            <div id="native-audio-fields" class="native-audio hidden">
+              <div class="field">
+                <span>Call audio</span>
+                <p id="native-audio-status" class="native-audio-status">macOS records the call audio directly. No driver and no audio routing.</p>
+              </div>
+              <div class="native-audio-actions">
+                <button id="native-audio-allow" class="btn primary small hidden" type="button">Allow call audio</button>
+                <button id="native-audio-settings" class="btn ghost small hidden" type="button">Open System Settings</button>
+              </div>
+            </div>
+
+            <!-- macOS 12.0 to 14.1, or by choice: the BlackHole 2ch virtual device. -->
+            <div id="blackhole-fields" class="blackhole-audio hidden">
+              <label class="field">
+                <span>System audio source</span>
+                <select id="system-source"></select>
+              </label>
+              <p id="blackhole-hint" class="hint">Pick <strong>BlackHole 2ch</strong> (selected automatically when it is
+                installed). Route the meeting into BlackHole through a Multi-Output Device: the README has
+                the steps. The “Call audio” meter confirms it is working.</p>
+            </div>
+
+            <!-- Only offered where macOS can record call audio itself. -->
+            <label id="system-audio-pref-row" class="field hidden">
+              <span>Call audio capture</span>
+              <select id="system-audio-pref">
+                <option value="auto" selected>Built into macOS (recommended)</option>
+                <option value="blackhole">BlackHole driver</option>
+              </select>
             </label>
-            <p class="hint">Pick <strong>BlackHole 2ch</strong> (auto-selected if found). Route the
-              meeting into BlackHole via a Multi-Output Device so it's captured — see the README. The
-              “Call audio” meter below confirms it's working.</p>
           </div>
 
           <div class="preflight">
@@ -195,13 +220,14 @@
           </div>
           <p id="announce-note" class="announce-note hidden" role="status">Couldn't play the recording
             announcement — recording continues. Let participants know yourself.</p>
+          <p id="capture-note" class="msg hidden" role="status"></p>
 
           <div id="meters" class="meters hidden">
-            <div id="meter-system-row" class="meter-row">
+            <div class="meter-row">
               <span class="cap" id="cap-mic">You (mic)</span>
               <div class="meter"><div id="meter-mic" class="meter-fill"></div></div>
             </div>
-            <div class="meter-row">
+            <div id="meter-system-row" class="meter-row">
               <span class="cap" id="cap-system">Call audio</span>
               <div class="meter"><div id="meter-system" class="meter-fill"></div></div>
             </div>
@@ -235,6 +261,7 @@
       </section>
     </main>
 
+    <script src="system-audio.js"></script>
     <script src="app.js"></script>
       <script type="module" src="transcriber.js"></script>
   </body>

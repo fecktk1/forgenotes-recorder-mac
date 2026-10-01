@@ -6,13 +6,16 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "verify": "node --check renderer/app.js && node --check main.js && node scripts/verify-capture-profile.mjs",
+    "verify": "node --check renderer/app.js && node --check renderer/system-audio.js && node --check renderer/level-worklet.js && node --check main.js && node scripts/verify-capture-profile.mjs",
     "prepare:config": "node scripts/write-production-config.mjs",
     "dist:mac": "npm run prepare:config && electron-builder --mac --universal --publish never && npm run verify:mac",
     "dist:mac:unsigned": "npm run prepare:config && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --universal --publish never -c.mac.identity=null -c.mac.hardenedRuntime=false -c.mac.notarize=false",
     "verify:mac": "bash scripts/verify-macos-build.sh release/ForgeNotes-Recorder.dmg",
-    "test": "node --test scripts/test-recording-store.cjs",
-    "test:media-runtime": "electron scripts/test-media-runtime.cjs"
+    "pack:mac:dev": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dir --publish never -c.appId=io.thecontentforge.forgenotes.recorder.mac.dev -c.productName=\"ForgeNotes Recorder Dev\" -c.extraMetadata.productName=\"ForgeNotes Recorder Dev\" -c.mac.identity=- -c.mac.hardenedRuntime=false -c.mac.notarize=false",
+    "test": "node --test scripts/test-recording-store.cjs scripts/test-system-audio.cjs",
+    "test:media-runtime": "electron scripts/test-media-runtime.cjs && electron scripts/test-call-audio-runtime.cjs",
+    "test:recorder-ui": "electron scripts/test-recorder-ui.cjs && electron scripts/test-recorder-ui.cjs --old-macos",
+    "analyze:recording": "electron scripts/analyze-recording.cjs"
   },
   "engines": {
     "node": ">=24 <25"
@@ -67,7 +70,8 @@
       "category": "public.app-category.productivity",
       "icon": "icon.png",
       "extendInfo": {
-        "NSMicrophoneUsageDescription": "ForgeNotes records your microphone and the meeting audio you route through BlackHole."
+        "NSMicrophoneUsageDescription": "ForgeNotes Recorder records your microphone while you are recording a meeting.",
+        "NSAudioCaptureUsageDescription": "ForgeNotes Recorder records the sound of your call, so that what the other participants say is in the recording. It only does this while you are recording."
       }
     }
   },
