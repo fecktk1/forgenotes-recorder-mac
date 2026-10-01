@@ -169,7 +169,23 @@
           </div>
 
           <p id="consent-copy" class="consent">🔴 Recording captures your mic and (if enabled) everyone on the call.
-            Make sure participants consent before you start.</p>
+            Make sure participants consent before you start. ForgeNotes will say “This meeting is being
+            recorded.” when you start — people on a call only hear it if your speakers are on.</p>
+
+          <div class="announce-setting">
+            <label class="checkbox">
+              <input id="announce-recording" type="checkbox" checked />
+              <span>Announce recording aloud</span>
+            </label>
+            <p class="hint">Says “This meeting is being recorded.” through your speakers when you start.</p>
+            <div id="announce-voice-row" class="announce-voice hidden">
+              <label class="field">
+                <span>Voice</span>
+                <select id="announce-voice"></select>
+              </label>
+              <button id="announce-preview" class="btn ghost" type="button">Preview</button>
+            </div>
+          </div>
 
           <label class="checkbox"><input id="auto-upload" type="checkbox" /><span>Automatically upload after saving (optional)</span></label>
           <div class="controls">
@@ -177,6 +193,8 @@
             <button id="pause-btn" class="btn ghost hidden">Pause</button>
             <button id="stop-btn" class="btn danger hidden">Stop &amp; save</button>
           </div>
+          <p id="announce-note" class="announce-note hidden" role="status">Couldn't play the recording
+            announcement — recording continues. Let participants know yourself.</p>
 
           <div id="meters" class="meters hidden">
             <div id="meter-system-row" class="meter-row">

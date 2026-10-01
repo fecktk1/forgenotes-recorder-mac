@@ -9,10 +9,21 @@ const hide = (id) => $(id).classList.add('hidden')
 
 const ROTATE_MS = 60 * 1000 // segment length — keeps each uploaded file small
 
+// Played once through the default audio output when a recording starts. The wording must
+// match the pre-rendered clips in renderer/announce/ ("phrase" in voices.json).
+const ANNOUNCE_TEXT = 'This meeting is being recorded.'
+const ANNOUNCE_KEY = 'fn_announce_recording' // localStorage: 'false' = off, anything else = on
+const ANNOUNCE_VOICE_KEY = 'fn_announce_voice' // localStorage: a voice id from voices.json
+const ANNOUNCE_VOICES_WAIT_MS = 1000 // longest the announcement waits for the voice list
+const ANNOUNCE_START_TIMEOUT_MS = 5000 // the clip never started playing — tell the user
+
 let CFG = null
 let auth = null // { access_token, refresh_token, expires_at(ms), email }
 let rec = null // active recording state
 let preflightMeter = null // live mic meter used by the pre-record device check
+let announceVoices = { voices: [], defaultId: '' } // from renderer/announce/voices.json
+let announceVoicesLoaded = Promise.resolve() // settles once the voice list has been read
+let announceClip = null // the announcement or preview clip that is playing, if any
 
 // ---------------------------------------------------------------- boot
 async function boot() {
@@ -172,15 +183,26 @@ function setCaptureProfile(profile, { syncSource = true, check = true } = {}) {
   $('mode-hint').textContent = room
     ? 'Uses one microphone for everyone in the room and separates speakers during transcription.'
     : 'Captures your microphone and BlackHole call audio as separate tracks.'
-  $('consent-copy').textContent = room
-    ? '🔴 Recording captures everyone in the room. Place the microphone near the center and make sure all participants consent.'
-    : '🔴 Recording captures your mic and (if enabled) everyone on the call. Make sure participants consent before you start.'
+  renderConsentCopy()
   if (syncSource) {
     if (room) $('source').value = 'in_person'
     else if ($('source').value === 'in_person') $('source').value = 'other'
   }
   localStorage.setItem('forgenotes_capture_profile', room ? 'room_single_mic' : 'remote_dual_track')
   if (check && !rec) runPreflight()
+}
+
+// The consent line has to stay truthful: it only promises the spoken notice while the
+// "Announce recording aloud" setting is on.
+function renderConsentCopy() {
+  const room = captureProfile() === 'room_single_mic'
+  const base = room
+    ? '🔴 Recording captures everyone in the room. Place the microphone near the center and make sure all participants consent.'
+    : '🔴 Recording captures your mic and (if enabled) everyone on the call. Make sure participants consent before you start.'
+  const spoken = room
+    ? ` ForgeNotes will say “${ANNOUNCE_TEXT}” when you start — people in the room only hear it if your speakers are on.`
+    : ` ForgeNotes will say “${ANNOUNCE_TEXT}” when you start — people on a call only hear it if your speakers are on.`
+  $('consent-copy').textContent = announceEnabled() ? base + spoken : base
 }
 
 // A pre-record device check: is the mic live (with a level meter to prove it), is the
@@ -393,6 +415,169 @@ function setupMeters(micStream, systemStream) {
   }
 }
 
+// ---------------------------------------------------------------- recording announcement
+// Plays a pre-rendered voice clip of "This meeting is being recorded." once, through the
+// computer's default audio output, right after capture has started — so the notice itself
+// lands in the recording. The clips ship with the app in renderer/announce/ and are listed
+// in voices.json there (ids, labels and the default voice): changing the set of voices is
+// an edit to that file plus the matching .mp3, with no code change. Nothing to install: no
+// audio driver, no virtual microphone. People on a call only hear it when the speakers
+// (not headphones) are on. It is never awaited and every failure is swallowed — the
+// announcement must never delay or break a recording.
+function announceEnabled() {
+  const box = $('announce-recording')
+  return box ? box.checked : true
+}
+
+function showAnnounceNote(visible) {
+  const el = $('announce-note')
+  if (el) el.classList.toggle('hidden', !visible)
+}
+
+// voices.json → { voices: [{ id, label }], defaultId }. An id is also the clip's file
+// name, so anything that is not a plain token is dropped. A missing or unlisted default
+// falls back to the first voice.
+function normalizeAnnounceVoices(raw) {
+  const seen = new Set()
+  const voices = []
+  for (const v of raw && Array.isArray(raw.voices) ? raw.voices : []) {
+    const id = v && typeof v.id === 'string' ? v.id : ''
+    if (!/^[A-Za-z0-9_-]+$/.test(id) || seen.has(id)) continue
+    seen.add(id)
+    voices.push({ id, label: typeof v.label === 'string' && v.label.trim() ? v.label.trim() : id })
+  }
+  const defaultId = raw && seen.has(raw.default) ? raw.default : voices[0] ? voices[0].id : ''
+  return { voices, defaultId }
+}
+
+// A stored or selected id that is unknown, or no longer shipped, falls back to the default.
+function resolveAnnounceVoice(id) {
+  return announceVoices.voices.some((v) => v.id === id) ? id : announceVoices.defaultId
+}
+
+function selectedAnnounceVoice() {
+  const sel = $('announce-voice')
+  return resolveAnnounceVoice(sel ? sel.value : '')
+}
+
+// The voice picker only shows while the announcement is switched on.
+function renderAnnounceVoiceRow() {
+  const row = $('announce-voice-row')
+  if (row) row.classList.toggle('hidden', !announceEnabled() || !announceVoices.voices.length)
+}
+
+function setAnnouncePreviewDisabled(disabled) {
+  const btn = $('announce-preview')
+  if (btn) btn.disabled = disabled
+}
+
+// The voice list is read by the main process (the page's CSP only lets the renderer
+// connect to https:, so it cannot fetch a local file itself). Never rejects.
+async function loadAnnounceVoices() {
+  try {
+    announceVoices = normalizeAnnounceVoices(await window.desktop.announceVoices())
+    const sel = $('announce-voice')
+    sel.replaceChildren()
+    for (const v of announceVoices.voices) {
+      const opt = document.createElement('option')
+      opt.value = v.id
+      opt.textContent = v.label
+      sel.appendChild(opt)
+    }
+    let stored = ''
+    try { stored = localStorage.getItem(ANNOUNCE_VOICE_KEY) || '' } catch { /* storage unavailable: use the default */ }
+    sel.value = resolveAnnounceVoice(stored)
+  } catch (e) {
+    console.warn('[forgenotes] could not load the announcement voices:', (e && e.message) || e)
+  }
+  renderAnnounceVoiceRow()
+}
+
+function stopAnnounceClip() {
+  if (!announceClip) return
+  const clip = announceClip
+  announceClip = null
+  clip.cancel()
+}
+
+// Plays one clip at full volume, replacing any clip already playing. onFail(why) is called
+// at most once: the file fails to load or decode, play() is refused, or playback has not
+// begun within ANNOUNCE_START_TIMEOUT_MS. A clip that is stopped on purpose is not a failure.
+function playAnnounceClip(id, onFail) {
+  stopAnnounceClip()
+  let watchdog = 0
+  let reported = false
+  const fail = (why) => {
+    clearTimeout(watchdog)
+    if (reported) return
+    reported = true
+    onFail(why)
+  }
+  try {
+    const audio = new Audio(`announce/${id}.mp3`)
+    const clip = {
+      cancel() {
+        reported = true
+        clearTimeout(watchdog)
+        try { audio.pause() } catch { /* already stopped */ }
+      },
+    }
+    audio.volume = 1
+    audio.onplaying = () => clearTimeout(watchdog)
+    audio.onended = () => {
+      clearTimeout(watchdog)
+      if (announceClip === clip) announceClip = null
+    }
+    audio.onerror = () => fail((audio.error && audio.error.message) || 'the clip could not be loaded')
+    announceClip = clip // also keeps the element alive until it has finished
+    watchdog = setTimeout(() => fail('playback did not start'), ANNOUNCE_START_TIMEOUT_MS)
+    const started = audio.play()
+    if (started && typeof started.catch === 'function') {
+      started.catch((e) => fail((e && e.message) || 'playback was refused'))
+    }
+  } catch (e) {
+    fail((e && e.message) || e)
+  }
+}
+
+async function announceRecording(current) {
+  const failed = (why) => {
+    console.warn('[forgenotes] recording announcement did not play:', why)
+    if (rec === current) showAnnounceNote(true)
+  }
+  try {
+    // The voice list loads at boot, long before anyone can press Start; the short race
+    // only covers a list that never arrives, so that case still ends in the note.
+    await Promise.race([announceVoicesLoaded, new Promise((resolve) => setTimeout(resolve, ANNOUNCE_VOICES_WAIT_MS))])
+    if (rec !== current || current.stopping) return // stopped before it could be played
+    const id = selectedAnnounceVoice()
+    if (!id) {
+      failed('no announcement voice is available')
+      return
+    }
+    playAnnounceClip(id, failed)
+  } catch (e) {
+    failed((e && e.message) || e)
+  }
+}
+
+// The "Preview" button next to the voice picker. Not available while recording, so a
+// preview can never be mistaken for (or captured as) the real announcement.
+function previewAnnounceVoice() {
+  if (rec) return
+  const failed = (why) => {
+    console.warn('[forgenotes] voice preview did not play:', why)
+    setStatus("Couldn't play the voice preview.", 'warn')
+  }
+  try {
+    const id = selectedAnnounceVoice()
+    if (id) playAnnounceClip(id, failed)
+    else failed('no announcement voice is available')
+  } catch (e) {
+    failed((e && e.message) || e)
+  }
+}
+
 // ---------------------------------------------------------------- segmented recording
 // One MediaRecorder per track per segment. On stop (rotation or final), its onstop
 // pushes the completed, independently-decodable webm blob to rec.segments.
@@ -462,6 +647,8 @@ function flushSegment(key, track) {
 
 async function startRecording() {
   setStatus('', null)
+  showAnnounceNote(false)
+  stopAnnounceClip() // a voice preview must not run into the recording
   hide('open-link')
   stopLocalPlayback()
   stopPreflightMeter() // release the preflight mic before opening the recording streams
@@ -539,6 +726,12 @@ async function startRecording() {
   rec.system = startTrackSegment('system', systemStream)
   rec.rotateTimer = setInterval(rotate, ROTATE_MS)
 
+  // Capture is live — say the notice now so it is part of the recording. Only here, on a
+  // fresh start: resuming from pause and segment rotation never repeat it. This runs well
+  // after stopLocalPlayback() above, which only touches the saved-recording player.
+  // Fire-and-forget: it must never delay or endanger the recording.
+  if (announceEnabled()) void announceRecording(rec)
+
   if (warning) setStatus(warning, 'warn')
 
   // Persistent capture status + live meters — the "Call audio" bar moving means the
@@ -560,6 +753,7 @@ async function startRecording() {
   $('pause-btn').classList.remove('hidden')
   $('stop-btn').classList.remove('hidden')
   $('signout-btn').disabled = true
+  setAnnouncePreviewDisabled(true)
   show('rec-indicator')
   rec.timer = setInterval(updateTimer, 500)
   updateTimer()
@@ -650,6 +844,7 @@ async function stopRecording() {
 function resetControls() {
   $('start-btn').classList.remove('hidden')
   $('signout-btn').disabled = false
+  setAnnouncePreviewDisabled(false)
 }
 
 // ---------------------------------------------------------------- upload
@@ -1039,6 +1234,22 @@ function wireEvents() {
 
   $('auto-upload').checked = localStorage.getItem('fn_auto_upload') === 'true'
   $('auto-upload').onchange = (e) => localStorage.setItem('fn_auto_upload', String(e.target.checked))
+  // "Announce recording aloud" — on unless the user switched it off. Set before
+  // setCaptureProfile() below so the consent line renders with the right wording.
+  let announceOn = true
+  try { announceOn = localStorage.getItem(ANNOUNCE_KEY) !== 'false' } catch { /* storage unavailable: stay on */ }
+  $('announce-recording').checked = announceOn
+  $('announce-recording').onchange = (e) => {
+    try { localStorage.setItem(ANNOUNCE_KEY, String(e.target.checked)) } catch { /* applies to this session only */ }
+    renderAnnounceVoiceRow()
+    renderConsentCopy()
+  }
+  $('announce-voice').onchange = (e) => {
+    try { localStorage.setItem(ANNOUNCE_VOICE_KEY, e.target.value) } catch { /* applies to this session only */ }
+  }
+  $('announce-preview').onclick = previewAnnounceVoice
+  // Read the voice list now so the picker is filled long before recording starts.
+  announceVoicesLoaded = loadAnnounceVoices()
   $('local-record-btn').onclick = enterRecorder
   $('signout-btn').onclick = signOut
   $('start-btn').onclick = startRecording

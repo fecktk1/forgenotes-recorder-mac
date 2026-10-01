@@ -5,6 +5,9 @@ const { contextBridge, ipcRenderer } = require('electron')
 contextBridge.exposeInMainWorld('desktop', {
   getConfig: () => ipcRenderer.invoke('config:get'),
 
+  // The shipped recording-announcement voices (renderer/announce/voices.json); null if unreadable.
+  announceVoices: () => ipcRenderer.invoke('announce:voices'),
+
   // Auth token persistence (encrypted at rest via OS safeStorage in main).
   secureGet: () => ipcRenderer.invoke('secure:get'),
   secureSet: (token) => ipcRenderer.invoke('secure:set', token),

@@ -1,0 +1,18 @@
+{
+  "phrase": "This meeting is being recorded.",
+  "default": "af_heart",
+  "voices": [
+    { "id": "af_heart",    "label": "Heart, American woman" },
+    { "id": "af_bella",    "label": "Bella, American woman" },
+    { "id": "af_sarah",    "label": "Sarah, American woman" },
+    { "id": "af_kore",     "label": "Kore, American woman" },
+    { "id": "af_aoede",    "label": "Aoede, American woman" },
+    { "id": "am_puck",     "label": "Puck, American man" },
+    { "id": "am_liam",     "label": "Liam, American man" },
+    { "id": "bf_emma",     "label": "Emma, British woman" },
+    { "id": "bf_isabella", "label": "Isabella, British woman" },
+    { "id": "bf_lily",     "label": "Lily, British woman" },
+    { "id": "bm_lewis",    "label": "Lewis, British man" },
+    { "id": "ff_siwis",    "label": "Siwis, French woman" }
+  ]
+}

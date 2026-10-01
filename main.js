@@ -83,6 +83,20 @@ ipcMain.handle('config:get', async () => {
   }
 })
 
+// ---------- IPC: recording-announcement voices ----------
+// renderer/announce/voices.json lists the voice clips that ship with the app and names the
+// default. The page's CSP only lets the renderer connect to https:, so it cannot fetch the
+// file itself; main reads it (this also works from inside app.asar). null = no list, and
+// the renderer then reports that the announcement could not be played.
+ipcMain.handle('announce:voices', async () => {
+  try {
+    return JSON.parse(await fs.readFile(path.join(__dirname, 'renderer', 'announce', 'voices.json'), 'utf8'))
+  } catch (e) {
+    console.warn('[forgenotes] could not read the announcement voices:', (e && e.message) || e)
+    return null
+  }
+})
+
 // ---------- IPC: encrypted token storage ----------
 ipcMain.handle('secure:get', async () => {
   try {
