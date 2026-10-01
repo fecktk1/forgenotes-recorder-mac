@@ -126,6 +126,8 @@ html, body {
 
 .announce-setting { display: flex; flex-direction: column; gap: 10px; }
 .announce-setting .hint { padding-left: 25px; }
+.announce-voice { display: flex; align-items: flex-end; gap: 8px; padding-left: 25px; }
+.announce-voice .field { flex: 1; min-width: 0; }
 .announce-note { margin: 0; font-size: 12px; line-height: 1.4; color: var(--warn); }
 
 .controls { display: flex; gap: 10px; align-items: center; }

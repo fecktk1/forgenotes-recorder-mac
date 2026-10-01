@@ -32,9 +32,15 @@ level meter before recording.
 Choose **Online call** for Zoom, Meet, Discord, and similar calls. Call audio uses the following
 one-time BlackHole setup.
 
-With **Announce recording aloud** on (the default), the app says “This meeting is being recorded.”
-once through the Mac's default audio output right after capture starts. It is not injected into the
-call: remote participants only hear it if your speakers are on. Resuming from pause does not repeat it.
+With **Announce recording aloud** on (the default), the app plays a recorded voice saying “This meeting
+is being recorded.” once through the Mac's default audio output right after capture starts. Pick the
+voice under the checkbox; **Preview** plays it. It is not injected into the call: remote participants
+only hear it if your speakers are on. Resuming from pause does not repeat it.
+
+The clips are pre-rendered files in `renderer/announce/` (made with Kokoro-82M, Apache-2.0), listed in
+`renderer/announce/voices.json` together with the default voice. To change the voices, edit that file and
+add or remove the matching `<id>.mp3`; `npm run verify` checks the list against the files. No system
+speech voice is used.
 
 ## One-time online-call audio setup
 
