@@ -55,10 +55,11 @@ jobs:
           fi
           test -d node_modules/electron/dist
 
-      - name: Audit dependencies and verify Electron media runtime
+      - name: Audit dependencies and verify Electron media runtime and shell hardening
         run: |
           npm audit --audit-level=low
           npm run test:media-runtime
+          npm run test:shell
 
       # Both signing secrets are decoded to files rather than passed as base64 strings.
       # CSC_LINK does accept inline base64, but macOS `base64` wraps its output at 76
@@ -99,6 +100,17 @@ jobs:
         run: |
           test -f release/latest-mac.yml || { echo "latest-mac.yml missing — auto-update would break" >&2; exit 1; }
           test -f release/ForgeNotes-Recorder.zip || { echo "zip missing — Squirrel.Mac cannot update from a DMG" >&2; exit 1; }
+          cat release/latest-mac.yml
+
+      # Electron 44 needs macOS 13 (Ventura). electron-updater compares os.release(), the
+      # Darwin version (22.x on macOS 13, 21.x on macOS 12), with minimumSystemVersion in
+      # latest-mac.yml and skips an update the Mac cannot run, so a Monterey install stays on
+      # the last version that launches instead of updating into one that will not open.
+      # electron-builder does not write the field, so add it before the feed is uploaded.
+      - name: Gate the update feed to macOS 13 and later
+        run: |
+          grep -q '^minimumSystemVersion:' release/latest-mac.yml || printf '\nminimumSystemVersion: 22.0.0\n' >> release/latest-mac.yml
+          grep -qx 'minimumSystemVersion: 22.0.0' release/latest-mac.yml || { echo "latest-mac.yml has an unexpected minimumSystemVersion" >&2; exit 1; }
           cat release/latest-mac.yml
 
       - name: Create checksum
