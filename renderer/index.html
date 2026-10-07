@@ -187,11 +187,31 @@
             </div>
           </div>
 
+          <!-- Stop on silence: off unless chosen. The choice is kept with the account (the web
+               recorder's setting), and the last value seen is used at Start. -->
+          <div class="silence-setting">
+            <label class="field">
+              <span>Stop a recording by itself</span>
+              <select id="silence-minutes"></select>
+            </label>
+            <p id="silence-message" class="hint hidden" role="status"></p>
+            <p id="silence-load-failed" class="hint hidden"><span id="silence-load-text"></span>
+              <button id="silence-retry" class="btn link small-link" type="button">Try again</button></p>
+            <p class="hint">A recording left running in an empty room uses your hours. If you turn this on, a
+              recording that has heard nothing for the time you choose asks whether you are still there, and
+              stops a minute later if nobody answers. Everything it recorded is kept, the quiet part included.</p>
+            <p id="silence-more" class="hint hidden"></p>
+          </div>
+
           <label class="checkbox"><input id="auto-upload" type="checkbox" /><span>Automatically upload after saving (optional)</span></label>
           <div class="controls">
             <button id="start-btn" class="btn primary big">Start recording</button>
             <button id="pause-btn" class="btn ghost hidden">Pause</button>
             <button id="stop-btn" class="btn danger hidden">Stop &amp; save</button>
+          </div>
+          <div id="silence-question" class="silence-question hidden" role="alert">
+            <p id="silence-question-text"></p>
+            <button id="silence-keep" class="btn primary" type="button">Keep recording</button>
           </div>
           <p id="announce-note" class="announce-note hidden" role="status">Couldn't play the recording
             announcement — recording continues. Let participants know yourself.</p>
@@ -221,6 +241,7 @@
             <p class="hint">Preview only — the full transcript is prepared after upload. Speech never leaves this machine.</p>
           </div>
 
+          <p id="stop-note" class="msg warn hidden" role="status"></p>
           <p id="status" class="msg hidden"></p>
           <a id="open-link" class="btn link hidden" href="#">Open in ForgeNotes →</a>
         </div>
@@ -235,6 +256,8 @@
       </section>
     </main>
 
+    <script src="capture-clock.js"></script>
+    <script src="silence.js"></script>
     <script src="app.js"></script>
       <script type="module" src="transcriber.js"></script>
   </body>

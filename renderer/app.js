@@ -1,6 +1,12 @@
 // ForgeNotes Recorder (macOS). Captures microphone and BlackHole system input
 // as separate one-minute segments, checkpointed locally before optional upload.
 // A crash can lose the current segment; completed checkpoints remain recoverable.
+//
+// Time: the recording's clock (capture-clock.js) stops while paused and while the Mac
+// sleeps, so segment offsets and durations count captured audio only; a suspend ends the
+// segment and a resume starts a new one. The true start and end are kept with the local
+// recording and sent as started_at / ended_at, however late the upload is.
+// Stop on silence (silence.js): off unless the person turned it on.
 'use strict'
 
 const $ = (id) => document.getElementById(id)
@@ -8,6 +14,7 @@ const show = (id) => $(id).classList.remove('hidden')
 const hide = (id) => $(id).classList.add('hidden')
 
 const ROTATE_MS = 60 * 1000 // segment length — keeps each uploaded file small
+const HEARTBEAT_MS = 500 // the timer display and the recording clock's sleep check
 
 // Played once through the default audio output when a recording starts. The wording must
 // match the pre-rendered clips in renderer/announce/ ("phrase" in voices.json).
@@ -157,14 +164,133 @@ async function callFn(name, { body, formData } = {}) {
   return data
 }
 
+// ---------------------------------------------------------------- database function call
+// PostgREST RPC as the signed-in person (the capture setting lives behind two of these).
+async function callRpc(name, args) {
+  const token = await getToken()
+  const res = await fetch(`${CFG.supabaseUrl}/rest/v1/rpc/${name}`, {
+    method: 'POST',
+    headers: { apikey: CFG.supabaseAnonKey, Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(args || {}),
+  })
+  const data = await res.json().catch(() => null)
+  if (!res.ok) {
+    const err = new Error((data && (data.message || data.error)) || `${name} failed (${res.status})`)
+    err.httpStatus = res.status
+    throw err
+  }
+  return data
+}
+
 // ---------------------------------------------------------------- recorder view
 async function enterRecorder() {
   hide('login-view')
   show('recorder-view')
   $('account-email').textContent = auth?.email || 'Recording locally'
   $('signout-btn').textContent = auth ? 'Sign out' : 'Sign in'
+  void loadSilenceSetting()
   await populateMics()
   runPreflight()
+}
+
+// ---------------------------------------------------------------- stop on silence: the setting
+// Stored per account on the server (the web recorder's setting), read here when signed in,
+// and the last value seen is kept in localStorage: Start reads that copy and never waits for
+// the network. Signed out, a choice is kept on this Mac only. With nothing seen, off.
+let silenceMinutes = FnSilence.SILENCE_DEFAULT_MINUTES
+let silenceRequest = 0 // the newest load or save wins
+
+function prefs() {
+  try { return window.localStorage } catch { return null }
+}
+
+function renderSilenceSetting(minutes) {
+  silenceMinutes = minutes
+  const sel = $('silence-minutes')
+  sel.replaceChildren()
+  for (const option of FnSilence.silenceOptions(minutes)) {
+    const opt = document.createElement('option')
+    opt.value = String(option.minutes)
+    opt.textContent = option.label
+    sel.appendChild(opt)
+  }
+  sel.value = String(minutes)
+  const more = $('silence-more')
+  if (minutes > 0) {
+    more.textContent = 'The question comes as a chime, a notification and the window title. A very quiet voice, ' +
+      'or a voice over a steady noise such as a fan, can be taken for silence, which is why it always asks first. ' +
+      'Pausing a recording is not silence. ' +
+      (auth ? 'Your choice is kept with your account, so it also applies when you record on the web.' : 'While you are signed out it is kept on this Mac.')
+    show('silence-more')
+  } else {
+    hide('silence-more')
+  }
+}
+
+function setSilenceMessage(text, ok) {
+  const el = $('silence-message')
+  if (!text) {
+    el.textContent = ''
+    hide('silence-message')
+    return
+  }
+  el.textContent = text
+  el.classList.toggle('saved-ok', ok)
+  el.classList.toggle('saved-error', !ok)
+  show('silence-message')
+}
+
+async function loadSilenceSetting() {
+  const request = ++silenceRequest
+  hide('silence-load-failed')
+  const cached = FnSilence.readCachedSilenceMinutes(prefs())
+  if (!auth || !CFG || !CFG.supabaseUrl) {
+    renderSilenceSetting(cached)
+    return
+  }
+  try {
+    const minutes = FnSilence.silenceMinutesFrom(await callRpc('forgenotes_capture_settings'))
+    if (request !== silenceRequest) return
+    FnSilence.cacheSilenceMinutes(minutes, prefs())
+    renderSilenceSetting(minutes)
+  } catch (e) {
+    if (request !== silenceRequest) return
+    renderSilenceSetting(cached)
+    $('silence-load-text').textContent = 'Your recording setting could not be loaded. Until it can, recordings here ' +
+      (cached === 0 ? 'keep going until you stop them.' : `use the choice this app last saw: stop after ${FnSilence.describeDuration(cached * 60000)} of silence.`)
+    show('silence-load-failed')
+    void diag(`silence setting could not be loaded: ${e.message}`)
+  }
+}
+
+async function saveSilenceSetting(value) {
+  const request = ++silenceRequest
+  const previous = silenceMinutes
+  const sel = $('silence-minutes')
+  sel.disabled = true
+  setSilenceMessage('')
+  try {
+    let saved
+    if (auth) {
+      saved = FnSilence.silenceMinutesFrom(await callRpc('forgenotes_set_capture_settings', { p_silence_stop_minutes: value }))
+    } else {
+      saved = FnSilence.normalizeSilenceMinutes(value)
+    }
+    FnSilence.cacheSilenceMinutes(saved, prefs())
+    if (request === silenceRequest) {
+      hide('silence-load-failed')
+      renderSilenceSetting(saved)
+      setSilenceMessage(FnSilence.silenceSettingSentence(saved, { local: !auth, recording: Boolean(rec), place: 'this Mac' }), true)
+    }
+  } catch (e) {
+    if (request === silenceRequest) {
+      renderSilenceSetting(previous)
+      setSilenceMessage('That setting could not be saved. Try again.', false)
+    }
+    void diag(`silence setting could not be saved: ${e.message}`)
+  } finally {
+    sel.disabled = false
+  }
 }
 
 // ---------------------------------------------------------------- preflight
@@ -370,23 +496,32 @@ function pickMime() {
   return ''
 }
 
-// Live RMS meters so you can SEE whether each track is actually receiving audio.
+// The longest stretch one stop-on-silence reading can cover (0.68 s at 48 kHz).
+const ROOM_SAMPLES = 32768
+
+// Live RMS meters so you can SEE whether each track is actually receiving audio. Also the
+// room's level for stop on silence (read: every captured track, from the audio that arrived
+// since the previous reading) and the chime that goes with the "Still there?" question.
 function setupMeters(micStream, systemStream) {
   let ctx
   try {
     ctx = new AudioContext()
   } catch {
-    return { stop() {} }
+    return { stop() {}, read() { return null }, chime() {}, audioMs() { return undefined } }
   }
-  const make = (stream, fillId) => {
+  const make = (stream, fillId, track) => {
     if (!stream) return null
     const src = ctx.createMediaStreamSource(stream)
     const analyser = ctx.createAnalyser()
     analyser.fftSize = 512
     src.connect(analyser)
-    return { analyser, data: new Uint8Array(analyser.fftSize), fillId }
+    const room = ctx.createAnalyser()
+    room.fftSize = ROOM_SAMPLES
+    src.connect(room)
+    return { analyser, data: new Uint8Array(analyser.fftSize), fillId, track, room, samples: new Float32Array(room.fftSize) }
   }
-  const meters = [make(micStream, 'meter-mic'), make(systemStream, 'meter-system')].filter(Boolean)
+  const meters = [make(micStream, 'meter-mic', 'mic'), make(systemStream, 'meter-system', 'system')].filter(Boolean)
+  let readAt = ctx.currentTime
   let raf = 0
   const tick = () => {
     for (const m of meters) {
@@ -411,6 +546,44 @@ function setupMeters(micStream, systemStream) {
         const el = document.getElementById(id)
         if (el) el.style.width = '0%'
       }
+    },
+    // The audio clock in ms: it advances only while audio flows (not while the computer
+    // sleeps), which tells a sleep from timers that were only late.
+    audioMs() {
+      return ctx.state === 'running' ? ctx.currentTime * 1000 : undefined
+    },
+    // Levels per track ({ mic, system }) of the audio that arrived since the last call, or
+    // null. If the audio clock is not moving there is no reading, and so no silence either.
+    read() {
+      if (ctx.state !== 'running' || !meters.length) return null
+      const fresh = Math.min(ROOM_SAMPLES, Math.round((ctx.currentTime - readAt) * ctx.sampleRate))
+      if (fresh < ctx.sampleRate * 0.05) return null
+      readAt = ctx.currentTime
+      const levels = {}
+      for (const m of meters) {
+        m.room.getFloatTimeDomainData(m.samples)
+        levels[m.track] = FnSilence.measureLevels(m.samples.subarray(m.samples.length - fresh), ctx.sampleRate)
+      }
+      return levels
+    },
+    // Two short tones through the default output (the web recorder's chime).
+    chime() {
+      try {
+        const at = ctx.currentTime
+        for (const [i, frequency] of [[0, 660], [1, 880]]) {
+          const oscillator = ctx.createOscillator()
+          const gain = ctx.createGain()
+          const from = at + i * 0.22
+          oscillator.frequency.value = frequency
+          gain.gain.setValueAtTime(0.0001, from)
+          gain.gain.exponentialRampToValueAtTime(0.25, from + 0.02)
+          gain.gain.exponentialRampToValueAtTime(0.0001, from + 0.2)
+          oscillator.connect(gain)
+          gain.connect(ctx.destination)
+          oscillator.start(from)
+          oscillator.stop(from + 0.22)
+        }
+      } catch { /* no sound is not a reason to do anything else */ }
     },
   }
 }
@@ -579,75 +752,167 @@ function previewAnnounceVoice() {
 }
 
 // ---------------------------------------------------------------- segmented recording
-// One MediaRecorder per track per segment. On stop (rotation or final), its onstop
-// pushes the completed, independently-decodable webm blob to rec.segments.
-function bankSegment(track, blob, startOffsetMs, durationMs) {
-  if (!blob.size || !rec) return Promise.resolve()
-  const current = rec
+// One MediaRecorder per track per segment. On stop (rotation, sleep or final), its onstop
+// pushes the completed, independently-decodable webm blob to the recording's segments.
+// Offsets and durations are on the recording's clock: paused and asleep time is not audio.
+function bankSegment(current, track, blob, startOffsetMs, durationMs) {
+  if (!blob.size || !current) return Promise.resolve()
   const seq = current.nextSeq[track] || 0
   current.nextSeq[track] = seq + 1
   const entry = { track, seq, startOffsetMs, durationMs }
   current.segments.push(entry)
   const writing = current.writes.then(async () => {
-    await window.desktop.checkpoint(`rec_${current.startedAt}`, { ...current.meta, createdAt: new Date(current.startedAt).toISOString() }, { ...entry, data: await blob.arrayBuffer() })
+    await window.desktop.checkpoint(current.localId, { ...current.meta, createdAt: new Date(current.startedAt).toISOString() }, { ...entry, data: await blob.arrayBuffer() })
   })
   current.writes = writing
   writing.catch((e) => {
     if (current.saveError) return
     current.saveError = e
     setStatus('Local saving failed. Capture is stopping; completed checkpoints remain on disk. ' + e.message, 'error')
-    if (rec === current && !current.stopping) void stopRecording().catch(() => {})
+    if (rec === current && !current.stopping) void stopRecording('save_failed').catch(() => {})
   })
   return writing
 }
 
-function startTrackSegment(track, stream) {
+// Where the recording is now, on its own clock.
+function offsetNow(current) {
+  return current.clock.elapsed(Date.now())
+}
+
+function startTrackSegment(current, track, stream) {
   if (!stream) return null
   const chunks = []
-  const startOffsetMs = elapsedMs()
-  const recorder = new MediaRecorder(stream, rec.mime ? { mimeType: rec.mime } : undefined)
+  const startOffsetMs = offsetNow(current)
+  const recorder = new MediaRecorder(stream, current.mime ? { mimeType: current.mime } : undefined)
+  const seg = { recorder, chunks, startOffsetMs, endOffsetMs: null, done: null }
   recorder.ondataavailable = (e) => {
     if (e.data && e.data.size) chunks.push(e.data)
   }
-  recorder.onstop = () => {
-    const blob = new Blob(chunks, { type: rec ? rec.mime : 'audio/webm' })
-    if (blob.size && rec) bankSegment(track, blob, startOffsetMs, Math.max(0, elapsedMs() - startOffsetMs))
-  }
+  seg.done = new Promise((resolve) => {
+    recorder.onstop = () => {
+      const blob = new Blob(chunks, { type: current.mime || 'audio/webm' })
+      // The end is fixed when the segment is ended (endTrackSegment), not when the encoder
+      // gets round to stopping: after a suspend that can be after the Mac woke up.
+      const end = seg.endOffsetMs ?? offsetNow(current)
+      if (blob.size) bankSegment(current, track, blob, startOffsetMs, Math.max(0, end - startOffsetMs))
+      resolve()
+    }
+  })
+  // Stop waits for every segment still being closed (one ended at a suspend may only
+  // finish after the Mac wakes), so nothing is banked after the recording is finished.
+  current.closing.add(seg.done)
+  seg.done.then(() => current.closing.delete(seg.done))
   recorder.start(1000)
-  return { recorder, chunks, startOffsetMs }
+  return seg
+}
+
+// Stop one track's segment at `endOffsetMs` and resolve once its blob is banked.
+function endTrackSegment(seg, endOffsetMs) {
+  if (!seg || !seg.recorder) return Promise.resolve()
+  if (seg.endOffsetMs === null) seg.endOffsetMs = endOffsetMs
+  if (seg.recorder.state === 'inactive') return seg.done
+  seg.recorder.stop()
+  return seg.done
+}
+
+function startSegments(current) {
+  current.mic = startTrackSegment(current, 'mic', current.micStream)
+  current.system = startTrackSegment(current, 'system', current.systemStream)
+  current.live = true
+  current.segmentStartedAt = Date.now()
+}
+
+// End the current segment on every track, all at the same point of the recording.
+function endSegments(current) {
+  const ending = [current.mic, current.system].filter(Boolean)
+  current.mic = null
+  current.system = null
+  current.live = false
+  const at = offsetNow(current)
+  return Promise.all(ending.map((seg) => endTrackSegment(seg, at)))
 }
 
 // Rotate every ROTATE_MS: stop the current segment recorders (their onstop banks the
 // segment) and immediately start fresh ones. The ~ms gap is negligible for transcription.
 function rotate() {
-  if (!rec || rec.paused || rec.stopping) return
-  const cycle = (key, track, stream) => {
-    const seg = rec[key]
-    if (seg && seg.recorder && seg.recorder.state !== 'inactive') seg.recorder.stop()
-    rec[key] = startTrackSegment(track, stream)
-  }
-  cycle('mic', 'mic', rec.micStream)
-  cycle('system', 'system', rec.systemStream)
+  const current = rec
+  if (!current || current.paused || current.stopping || !current.live) return
+  void endSegments(current)
+  startSegments(current)
 }
 
-// Stop one track's current segment and wait for its blob to be banked.
-function flushSegment(key, track) {
-  return new Promise((resolve) => {
-    const seg = rec && rec[key]
-    if (!seg || !seg.recorder) return resolve()
-    seg.recorder.onstop = () => {
-      const blob = new Blob(seg.chunks, { type: rec ? rec.mime || 'audio/webm' : 'audio/webm' })
-      if (blob.size && rec) bankSegment(track, blob, seg.startOffsetMs, Math.max(0, elapsedMs() - seg.startOffsetMs))
-      resolve()
-    }
-    if (seg.recorder.state !== 'inactive') seg.recorder.stop()
-    else resolve()
-  })
+// ---------------------------------------------------------------- sleep and wake
+// Nothing is captured while the Mac sleeps. At suspend the segment ends (its length is what
+// was captured up to then) and the clock stops; at resume a new segment starts. main.js
+// forwards powerMonitor's suspend and resume with the times they fired; the heartbeat below
+// catches a sleep whose events were missed.
+function streamLive(stream) {
+  return Boolean(stream) && stream.getAudioTracks().some((t) => t.readyState === 'live')
+}
+
+function onPower(event) {
+  const current = rec
+  if (!current || current.stopping || !event) return
+  const at = Number.isFinite(event.at) ? event.at : Date.now()
+  if (event.state === 'suspend') {
+    // False for news of a sleep the heartbeat already found (delivered after waking).
+    if (!current.clock.suspend(at)) return
+    void diag(`${current.localId}: Mac going to sleep at ${Math.round(offsetNow(current) / 1000)} s of audio; segment ended`)
+    if (current.live) void endSegments(current)
+  } else if (event.state === 'resume') {
+    current.clock.wake(at)
+    void diag(`${current.localId}: Mac woke up; recording continues`)
+    resumeAfterSleep(current)
+  }
+}
+
+// After a sleep (or a gap): start new segments, if the inputs survived it.
+function resumeAfterSleep(current) {
+  if (rec !== current || current.stopping || current.clock.asleep() || current.paused) return
+  if (current.silence) current.silence.resume()
+  if (current.live) return
+  if (!streamLive(current.micStream)) {
+    void diag(`${current.localId}: microphone not available after waking; stopping`)
+    void stopRecording('device_lost')
+    return
+  }
+  if (current.systemStream && !streamLive(current.systemStream)) {
+    current.systemStream = null
+    const sysEl = $('cap-system')
+    sysEl.textContent = 'Call audio: NOT captured — mic only'
+    sysEl.className = 'cap bad'
+    setStatus('Call audio was not available after the Mac woke up — recording the microphone only.', 'warn')
+  }
+  try {
+    startSegments(current)
+  } catch (e) {
+    void diag(`${current.localId}: could not restart capture after waking: ${e.message}`)
+    void endSegments(current)
+    void stopRecording('device_lost')
+  }
+}
+
+// Runs every HEARTBEAT_MS while recording: the timer display, and the clock's check for
+// time in which this process was frozen (a sleep whose suspend was not seen).
+function heartbeat() {
+  const current = rec
+  if (!current || current.stopping) return
+  const found = current.clock.beat(Date.now(), current.meters ? current.meters.audioMs() : undefined)
+  if (found.gapMs) {
+    void diag(`${current.localId}: ${Math.round(found.gapMs / 1000)} s with no timers (Mac asleep?) left out of the recording's length`)
+    if (current.silence && !current.paused) current.silence.resume()
+    // The segment that spans the gap ends here and a new one starts (not one that a resume
+    // already started after the gap).
+    if (current.segmentStartedAt < Date.now() - found.gapMs) rotate()
+  }
+  if (found.woke) resumeAfterSleep(current)
+  updateTimer()
 }
 
 async function startRecording() {
   setStatus('', null)
   showAnnounceNote(false)
+  showStopNote('')
   stopAnnounceClip() // a voice preview must not run into the recording
   hide('open-link')
   stopLocalPlayback()
@@ -695,13 +960,16 @@ async function startRecording() {
   }
 
   const mime = pickMime()
+  const startedAt = Date.now()
   rec = {
+    localId: `rec_${startedAt}`,
     micStream,
     systemStream,
+    streams: [micStream, systemStream].filter(Boolean),
     mime: mime || 'audio/webm',
-    startedAt: Date.now(),
-    pausedMs: 0,
-    pauseStart: 0,
+    startedAt,
+    // Counts captured time only: stops while paused and while the Mac is asleep.
+    clock: FnCaptureClock.createCaptureClock(startedAt),
     paused: false,
     meta: {
       title: $('title').value.trim(),
@@ -710,9 +978,15 @@ async function startRecording() {
       visibility: $('visibility').value,
       template_key: $('template').value,
       tags: $('tags').value,
+      // When recording began, kept with the local copy and sent as started_at, however
+      // late (or after however many restarts) the upload happens.
+      startedAt: new Date(startedAt).toISOString(),
     },
     mic: null,
     system: null,
+    live: false,
+    segmentStartedAt: 0,
+    closing: new Set(),
     segments: [],
     nextSeq: {},
     writes: Promise.resolve(),
@@ -720,10 +994,12 @@ async function startRecording() {
     rotateTimer: null,
     timer: null,
     meters: null,
+    plan: FnSilence.silencePlan(0),
+    silence: null,
+    previousTitle: null,
     stopping: false,
   }
-  rec.mic = startTrackSegment('mic', micStream)
-  rec.system = startTrackSegment('system', systemStream)
+  startSegments(rec)
   rec.rotateTimer = setInterval(rotate, ROTATE_MS)
 
   // Capture is live — say the notice now so it is part of the recording. Only here, on a
@@ -746,6 +1022,7 @@ async function startRecording() {
   }
   rec.meters = setupMeters(micStream, systemStream)
   show('meters')
+  startSilenceWatch(rec)
   // Fire-and-forget: captions must never delay or endanger the recording.
   if (window.fnLive) window.fnLive.start({ micStream, systemStream })
 
@@ -755,34 +1032,90 @@ async function startRecording() {
   $('signout-btn').disabled = true
   setAnnouncePreviewDisabled(true)
   show('rec-indicator')
-  rec.timer = setInterval(updateTimer, 500)
+  rec.timer = setInterval(heartbeat, HEARTBEAT_MS)
   updateTimer()
 }
 
+// ---------------------------------------------------------------- stop on silence: the question
+// Uses the setting as last seen on this Mac (Start never waits for the network). Off means
+// never ask, never stop. Every captured track is read: silence is all of them quiet.
+function startSilenceWatch(current) {
+  current.plan = FnSilence.silencePlan(FnSilence.readCachedSilenceMinutes(prefs()))
+  if (!current.plan.enabled) return
+  current.silence = FnSilence.createSilenceWatch({
+    plan: current.plan,
+    clock: () => offsetNow(current),
+    wall: () => Date.now(),
+    read: () => (current.meters ? current.meters.read() : null),
+    chime: () => { if (current.meters) current.meters.chime() },
+    ask: (s) => showSilenceQuestion(current, s),
+    update: (s) => { if (rec === current) $('silence-question-text').textContent = FnSilence.questionSentence(s.silentMs, s.secondsLeft) },
+    clear: () => hideSilenceQuestion(current),
+    stop: () => {
+      void diag(`${current.localId}: stopped by itself after ${FnSilence.describeDuration(current.plan.stopAfterMs)} of silence with no answer`)
+      void stopRecording('silence')
+    },
+  })
+  current.silence.start()
+}
+
+// Noticed by someone who is not looking at the app: the chime (silence.js), the window
+// title, and a notification plus a bouncing Dock icon from main.
+function showSilenceQuestion(current, s) {
+  if (rec !== current) return
+  $('silence-question-text').textContent = FnSilence.questionSentence(s.silentMs, s.secondsLeft)
+  show('silence-question')
+  if (document.title !== FnSilence.WARNING_TITLE) current.previousTitle = document.title
+  document.title = FnSilence.WARNING_TITLE
+  window.desktop.silenceAsk(FnSilence.notificationBody(current.plan)).catch(() => {})
+}
+
+function hideSilenceQuestion(current) {
+  hide('silence-question')
+  if (document.title === FnSilence.WARNING_TITLE) document.title = (current && current.previousTitle) || 'ForgeNotes Recorder'
+  window.desktop.silenceClear().catch(() => {})
+}
+
+// "Keep recording", from the button or the notification. It counts as sound.
+function keepRecording() {
+  if (rec && rec.silence && !rec.stopping) rec.silence.keep()
+}
+
+// Why a recording stopped by itself, left on screen until the next Start.
+function showStopNote(text) {
+  const el = $('stop-note')
+  el.textContent = text || ''
+  el.classList.toggle('hidden', !text)
+}
+
 function togglePause() {
-  if (!rec) return
-  const recorders = [rec.mic, rec.system].filter(Boolean).map((s) => s.recorder)
-  if (!rec.paused) {
-    recorders.forEach((r) => { if (r.state === 'recording') r.pause() })
-    rec.paused = true
-    rec.pauseStart = Date.now()
+  const current = rec
+  if (!current || current.stopping) return
+  const segments = [current.mic, current.system].filter(Boolean)
+  const now = Date.now()
+  if (!current.paused) {
+    segments.forEach((s) => { if (s.recorder.state === 'recording') s.recorder.pause() })
+    current.paused = true
+    current.clock.pause(now)
+    if (current.silence) current.silence.pause()
     if (window.fnLive) window.fnLive.setPaused(true)
     $('pause-btn').textContent = 'Resume'
     $('rec-indicator').classList.add('hidden')
   } else {
-    recorders.forEach((r) => { if (r.state === 'paused') r.resume() })
-    rec.pausedMs += Date.now() - rec.pauseStart
-    rec.paused = false
+    current.clock.resume(now)
+    current.paused = false
+    if (current.live) segments.forEach((s) => { if (s.recorder.state === 'paused') s.recorder.resume() })
+    if (current.silence) current.silence.resume()
     if (window.fnLive) window.fnLive.setPaused(false)
     $('pause-btn').textContent = 'Pause'
     show('rec-indicator')
+    // The Mac slept while paused, which ended the segment: start a new one.
+    if (!current.live) resumeAfterSleep(current)
   }
 }
 
 function elapsedMs() {
-  if (!rec) return 0
-  const paused = rec.paused ? Date.now() - rec.pauseStart : 0
-  return Math.max(0, Date.now() - rec.startedAt - rec.pausedMs - paused)
+  return rec ? offsetNow(rec) : 0
 }
 
 function elapsedSec() {
@@ -796,29 +1129,35 @@ function updateTimer() {
   $('rec-timer').textContent = `${mm}:${ss}`
 }
 
-async function stopRecording() {
+// reason: 'manual' (Stop), 'silence' (nobody answered "Still there?"), 'save_failed'
+// (the disk refused a segment) or 'device_lost' (the microphone did not survive a sleep).
+async function stopRecording(reason = 'manual') {
   if (!rec || rec.stopping) return
-  rec.stopping = true
+  const current = rec
+  current.stopping = true
+  const endedAt = new Date().toISOString()
+  if (current.silence) current.silence.dispose()
+  hideSilenceQuestion(current)
   if (window.fnLive) window.fnLive.stop()
-  clearInterval(rec.rotateTimer)
-  clearInterval(rec.timer)
-  if (rec.meters) rec.meters.stop()
+  clearInterval(current.rotateTimer)
+  clearInterval(current.timer)
+  if (current.meters) current.meters.stop()
   hide('meters')
   hide('rec-indicator')
   $('pause-btn').classList.add('hidden')
   $('stop-btn').classList.add('hidden')
   $('pause-btn').textContent = 'Pause'
 
-  // Flush the in-progress segment on each track, then collect everything.
-  await flushSegment('mic', 'mic')
-  await flushSegment('system', 'system')
+  // End the in-progress segment on each track (if a sleep has not already), wait for every
+  // segment still closing, then collect everything. A recorder that never reports back
+  // cannot hold Stop forever.
+  await endSegments(current)
+  await Promise.race([Promise.all([...current.closing]), new Promise((resolve) => setTimeout(resolve, 15000))])
 
-  rec.micStream.getTracks().forEach((t) => t.stop())
-  if (rec.systemStream) rec.systemStream.getTracks().forEach((t) => t.stop())
+  current.streams.forEach((stream) => stream.getTracks().forEach((t) => t.stop()))
 
-  const current = rec
-  const segments = rec.segments
-  const localId = `rec_${rec.startedAt}`
+  const segments = current.segments
+  const localId = current.localId
   rec = null
   resetControls()
 
@@ -827,9 +1166,13 @@ async function stopRecording() {
     return
   }
 
+  const uploading = $('auto-upload').checked && Boolean(auth)
+  if (reason === 'silence') showStopNote(FnSilence.stoppedSentence(current.plan, { uploading, place: 'this Mac' }))
+  else if (reason === 'device_lost') showStopNote('The recording stopped because the microphone was not available after the Mac woke up. Everything recorded before that is kept on this Mac.')
+
   try {
     await current.writes
-    await window.desktop.finishRecording(localId)
+    await window.desktop.finishRecording(localId, { endedAt, stopReason: reason })
     await refreshPending()
   } catch (e) {
     await refreshPending().catch(() => {})
@@ -837,7 +1180,8 @@ async function stopRecording() {
     return
   }
   setStatus('Saved on this device. Play it below, open its folder, or choose Upload & transcribe.', 'ok')
-  if ($('auto-upload').checked && auth) await retryPending(localId, $('stop-btn'))
+  void loadSilenceSetting() // the next Start uses the account's current choice
+  if (uploading) await retryPending(localId, $('stop-btn'))
 
 }
 
@@ -975,6 +1319,8 @@ async function uploadSegments(localId, meta, seqd) {
       // skips chunks the server already has, instead of re-uploading everything into
       // a fresh duplicate session.
       client_ref: localId,
+      // started_at: when recording began (kept in meta.json), not when this upload runs.
+      ...FnCaptureClock.createSessionTimes(meta, localId),
     }
     // Empty pick = "Use my account default": OMIT template_key entirely so the server
     // (forgenotes-create-session) applies forgenotes_user_settings.default_template_key.
@@ -1015,8 +1361,10 @@ async function uploadSegments(localId, meta, seqd) {
       setStatus(`Uploading… ${done}/${seqd.length}${resumed ? ` (${resumed} already done)` : ''}`, 'busy')
     }
 
+    // duration_seconds is captured audio (the recording clock leaves out pauses and sleep);
+    // ended_at is when recording stopped, not when this upload finished.
     await callFn('forgenotes-finalize-session', {
-      body: { session_id: sessionId, duration_seconds: meta.durationSec || 0 },
+      body: { session_id: sessionId, duration_seconds: meta.durationSec || 0, ...FnCaptureClock.finalizeTimes(meta, localId, seqd) },
     })
 
     await window.desktop.markUploaded(localId, sessionId)
@@ -1254,7 +1602,15 @@ function wireEvents() {
   $('signout-btn').onclick = signOut
   $('start-btn').onclick = startRecording
   $('pause-btn').onclick = togglePause
-  $('stop-btn').onclick = stopRecording
+  $('stop-btn').onclick = () => stopRecording('manual')
+  // Stop on silence: the setting, and the answer to "Still there?" (button or notification).
+  renderSilenceSetting(FnSilence.readCachedSilenceMinutes(prefs()))
+  $('silence-minutes').onchange = (e) => saveSilenceSetting(Number(e.target.value))
+  $('silence-retry').onclick = () => loadSilenceSetting()
+  $('silence-keep').onclick = keepRecording
+  window.desktop.onSilenceKeep(keepRecording)
+  // The Mac going to sleep and waking up (main.js forwards powerMonitor).
+  window.desktop.onPower(onPower)
   $('preflight-btn').onclick = runPreflight
   $('mic').onchange = () => { if (!rec) runPreflight() }
   if ($('system-source')) $('system-source').onchange = () => { if (!rec) runPreflight() }
