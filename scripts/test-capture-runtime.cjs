@@ -104,6 +104,13 @@ app
     // boot() fills the setting after its first IPC round trip, which can be after the load event.
     await until('the setting to show the last value seen', () => run(`document.getElementById('silence-minutes').value === '1'`), 10000)
 
+    // This install's device id (sent with a recording's start): made by main through the
+    // preload bridge, kept in userData, the same on every later call.
+    const deviceId = await run('window.desktop.deviceId()')
+    assert.match(deviceId, /^mac-[0-9a-f-]{36}$/)
+    assert.equal(fs.readFileSync(path.join(userData, 'device-id.txt'), 'utf8').trim(), deviceId)
+    assert.equal(await run('window.desktop.deviceId()'), deviceId)
+
     await run(`document.getElementById('local-record-btn').click(); true`)
     await until('the recorder view', () => visible('recorder-view'), 10000)
     await until('the device check', () => run(`document.getElementById('pf-mic')?.classList.contains('ok')`), 10000)

@@ -6,12 +6,12 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "verify": "node --check renderer/capture-clock.js && node --check renderer/silence.js && node --check renderer/app.js && node --check main.js && node scripts/verify-capture-profile.mjs",
+    "verify": "node --check renderer/capture-clock.js && node --check renderer/silence.js && node --check renderer/app.js && node --check main.js && node --check device-id.js && node scripts/verify-capture-profile.mjs",
     "prepare:config": "node scripts/write-production-config.mjs",
     "dist:mac": "npm run prepare:config && electron-builder --mac --universal --publish never && npm run verify:mac",
     "dist:mac:unsigned": "npm run prepare:config && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --universal --publish never -c.mac.identity=null -c.mac.hardenedRuntime=false -c.mac.notarize=false",
     "verify:mac": "bash scripts/verify-macos-build.sh release/ForgeNotes-Recorder.dmg",
-    "test": "node --test scripts/test-recording-store.cjs scripts/test-capture-clock.cjs scripts/test-silence.cjs",
+    "test": "node --test scripts/test-recording-store.cjs scripts/test-capture-clock.cjs scripts/test-silence.cjs scripts/test-device-id.cjs",
     "test:media-runtime": "electron scripts/test-media-runtime.cjs",
     "test:capture-runtime": "electron scripts/test-capture-runtime.cjs"
   },
@@ -40,7 +40,8 @@
       "!node_modules/@img/**",
       "!node_modules/sharp/**",
       "!node_modules/onnxruntime-node/**",
-      "recording-store.js"
+      "recording-store.js",
+      "device-id.js"
     ],
     "directories": {
       "output": "release"
