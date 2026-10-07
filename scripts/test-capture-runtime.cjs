@@ -101,7 +101,8 @@ app
       localStorage.setItem('fn_live_captions', 'off'); localStorage.setItem('fn_seen_intro', '1'); true`)
     win.webContents.reload()
     await new Promise((resolve) => win.webContents.once('did-finish-load', resolve))
-    assert.equal(await run(`document.getElementById('silence-minutes').value`), '1', 'the setting shows the last value seen')
+    // boot() fills the setting after its first IPC round trip, which can be after the load event.
+    await until('the setting to show the last value seen', () => run(`document.getElementById('silence-minutes').value === '1'`), 10000)
 
     await run(`document.getElementById('local-record-btn').click(); true`)
     await until('the recorder view', () => visible('recorder-view'), 10000)
