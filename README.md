@@ -53,8 +53,13 @@ speech voice is used.
 2. Open **Audio MIDI Setup** and create a **Multi-Output Device**.
 3. Select both your normal speakers/headphones and **BlackHole 2ch**.
 4. Route the meeting app's output to that Multi-Output Device.
+5. Leave your Mac's sound **input** on your real microphone, not BlackHole. In the recorder,
+   **Microphone** is the microphone you speak into and the call-audio source is BlackHole 2ch.
 
 The recorder's **You** and **Call audio** meters confirm that both tracks are receiving audio.
+The two must be different inputs: when the microphone would open the call-audio input, the
+recorder starts on another microphone, the device check flags it, and Start records that input
+once, as the microphone, instead of the same audio twice.
 
 ## Development
 

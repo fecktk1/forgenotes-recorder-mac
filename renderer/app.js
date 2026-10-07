@@ -288,7 +288,10 @@ async function runPreflight() {
       const sysSel = $('system-source')
       const selected = sysSel && sysSel.value
       const selectedLabel = selected ? (inputs.find((d) => d.deviceId === selected)?.label || 'selected input') : ''
-      if (selected) setPreflightRow('system', 'ok', 'Call audio source', `Capturing “${selectedLabel}” — route the meeting into it via a Multi-Output Device.`)
+      if (selected && FnInputDevices.sameInput($('mic').value, selected, inputs)) {
+        setPreflightRow('system', 'fail', 'Call audio source',
+          `The microphone is “${FnInputDevices.inputName(selected, inputs)}” too: the call would be recorded twice and your own voice not at all. Pick the microphone you speak into above.`)
+      } else if (selected) setPreflightRow('system', 'ok', 'Call audio source', `Capturing “${selectedLabel}” — route the meeting into it via a Multi-Output Device.`)
       else if (hasBlackhole) setPreflightRow('system', 'warn', 'Call audio source', 'BlackHole is available but not selected — pick it above to capture call audio.')
       else setPreflightRow('system', 'warn', 'Call audio source', 'No system-audio source — install BlackHole 2ch (see README) to capture call audio.')
     } catch {
@@ -355,10 +358,23 @@ async function populateMics() {
       opt.value = d.deviceId
       opt.textContent = d.label || `Input ${i + 1}`
       sysSel.appendChild(opt)
-      if (/blackhole/i.test(d.label || '')) blackholeId = d.deviceId
+      // The device itself, never the "Default - BlackHole 2ch" entry that follows macOS.
+      if (/blackhole/i.test(d.label || '') && !FnInputDevices.isPseudo(d.deviceId)) blackholeId = d.deviceId
     })
     if (blackholeId) sysSel.value = blackholeId
+    // When macOS's input is BlackHole, the Microphone list starts on "Default - BlackHole
+    // 2ch": the call would be recorded twice and the user's voice not at all. Start on a
+    // real microphone instead.
+    if (sysSel.value && inputs.length) micSel.value = FnInputDevices.distinctMicId(inputs, sysSel.value, micSel.value)
   }
+}
+
+// The microphone and the call-audio source must be different inputs. The same input on
+// both tracks records the same samples twice (a byte-identical "call" track), so the
+// meeting is transcribed twice and the user's own voice is missing.
+function sameInputMessage(name) {
+  return `The microphone and the call-audio source are both “${name}”, so it is recorded once, as your microphone. ` +
+    'Pick the microphone you speak into above and BlackHole 2ch for call audio.'
 }
 
 // ---------------------------------------------------------------- capture
@@ -673,7 +689,18 @@ async function startRecording() {
 
   let systemStream = null
   let warning = null
-  if (systemId) {
+  // The inputs as they are now, to tell whether two ids open the same device. Without the
+  // list, only equal ids count as the same input.
+  let inputs = []
+  try {
+    inputs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'audioinput')
+  } catch {
+    inputs = []
+  }
+  if (systemId && FnInputDevices.sameInput(micId, systemId, inputs)) {
+    warning = sameInputMessage(FnInputDevices.inputName(systemId, inputs))
+    console.warn('[forgenotes] the call-audio source is the microphone input; recording it once')
+  } else if (systemId) {
     try {
       systemStream = await navigator.mediaDevices.getUserMedia({
         audio: {
@@ -685,6 +712,13 @@ async function startRecording() {
       })
       const track = systemStream.getAudioTracks()[0]
       console.log('[forgenotes] system-audio (BlackHole) track:', track && track.label, track && track.getSettings())
+      // Different ids can still open one device (an input that changed in between).
+      if (FnInputDevices.sameOpenedInput(micStream.getAudioTracks()[0], track, inputs)) {
+        systemStream.getTracks().forEach((t) => t.stop())
+        systemStream = null
+        warning = sameInputMessage(FnInputDevices.baseLabel(track && track.label) || FnInputDevices.inputName(systemId, inputs))
+        console.warn('[forgenotes] the opened call-audio track is the microphone input; recording it once')
+      }
     } catch (e) {
       systemStream = null
       warning = `Could not open the system-audio device (${e.name}: ${e.message}) — recording mic only. Is BlackHole installed and selected?`
