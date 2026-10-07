@@ -32,7 +32,10 @@ if (scriptOrder.some((at) => at < 0) || !(scriptOrder[0] < scriptOrder[2] && scr
   throw new Error('index.html must load capture-clock.js and silence.js before app.js')
 }
 for (const token of [
-  '...FnCaptureClock.createSessionTimes(meta, localId)',
+  'const times = FnCaptureClock.createSessionTimes(meta, localId)',
+  '...times,',
+  // device_id only with the recording's own start (social-os one-recording rule).
+  'if (times.started_at) {',
   'FnCaptureClock.finalizeTimes(meta, localId, seqd)',
   'clock: FnCaptureClock.createCaptureClock(startedAt)',
   'window.desktop.onPower(onPower)',

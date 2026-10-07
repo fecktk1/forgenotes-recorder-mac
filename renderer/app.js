@@ -1307,6 +1307,7 @@ async function uploadSegments(localId, meta, seqd) {
   activeUploads.add(localId)
   try {
     setStatus(`Uploading ${seqd.length} segment${seqd.length === 1 ? '' : 's'} to ForgeNotes…`, 'busy')
+    const times = FnCaptureClock.createSessionTimes(meta, localId)
     const body = {
       title: meta.title || 'Untitled meeting',
       source_type: meta.source_type || 'other',
@@ -1320,7 +1321,14 @@ async function uploadSegments(localId, meta, seqd) {
       // a fresh duplicate session.
       client_ref: localId,
       // started_at: when recording began (kept in meta.json), not when this upload runs.
-      ...FnCaptureClock.createSessionTimes(meta, localId),
+      ...times,
+    }
+    // Which install recorded it, for ForgeNotes' one-live-recording-at-a-time rule. Only with
+    // the real start: the rule compares meeting times, and without one the server would date
+    // this upload by now. The server applies the same condition. Never blocks the upload.
+    if (times.started_at) {
+      const deviceId = await Promise.resolve().then(() => window.desktop.deviceId()).catch(() => null)
+      if (deviceId) body.device_id = deviceId
     }
     // Empty pick = "Use my account default": OMIT template_key entirely so the server
     // (forgenotes-create-session) applies forgenotes_user_settings.default_template_key.

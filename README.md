@@ -72,6 +72,8 @@ Authentication is retained through Electron `safeStorage`. Use **Record locally*
 
 **Times.** A meeting's start and end are the recording's own (`started_at` / `ended_at`, kept in `meta.json`), however late it is uploaded. Segment offsets and durations, and the length sent at upload, count captured audio only: the recording's clock stops while paused and while the Mac sleeps. A sleep ends the current segment and waking starts a new one.
 
+**This install's id.** Each upload also sends `device_id`: an opaque id made once and kept in `device-id.txt` in the app's data folder (`mac-` and a random UUID). ForgeNotes uses it only for "one live recording at a time per account", and only alongside the recording's own start; it is not sent for a recording whose start is unknown. When the file cannot be written, no id is sent.
+
 ## Reproducible internal build
 
 The build refuses to package a missing or privileged Supabase key. Set the public anon JWT in the
