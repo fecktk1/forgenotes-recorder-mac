@@ -9,7 +9,7 @@ than ScreenCaptureKit, so it does not request screen-recording permission.
 
 ## Requirements
 
-- macOS 12 Monterey or newer
+- macOS 13 Ventura or newer (Electron 44 dropped macOS 12; Monterey installs stay on 0.10.x)
 - Apple Silicon or 64-bit Intel Mac
 - Node.js 24 for development and release builds
 - BlackHole 2ch for capturing meeting audio

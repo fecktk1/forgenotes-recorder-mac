@@ -39,6 +39,6 @@ The team identifier is `X36AQ2X3XN`.
 
 ## Requirements
 
-- macOS 12 Monterey or newer
+- macOS 13 Ventura or newer (Electron 44 dropped macOS 12; Monterey installs stay on 0.10.x)
 - Apple Silicon or 64-bit Intel Mac (the build is universal)
 - BlackHole 2ch and a Multi-Output Device for capturing call audio

@@ -11,8 +11,9 @@
     "dist:mac": "npm run prepare:config && electron-builder --mac --universal --publish never && npm run verify:mac",
     "dist:mac:unsigned": "npm run prepare:config && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --universal --publish never -c.mac.identity=null -c.mac.hardenedRuntime=false -c.mac.notarize=false",
     "verify:mac": "bash scripts/verify-macos-build.sh release/ForgeNotes-Recorder.dmg",
-    "test": "node --test scripts/test-recording-store.cjs",
-    "test:media-runtime": "electron scripts/test-media-runtime.cjs"
+    "test": "node --test scripts/test-recording-store.cjs scripts/test-token-store.cjs",
+    "test:media-runtime": "electron scripts/test-media-runtime.cjs",
+    "test:shell": "electron scripts/test-shell-hardening.cjs"
   },
   "engines": {
     "node": ">=24 <25"
@@ -22,7 +23,7 @@
     "electron-updater": "6.8.9"
   },
   "devDependencies": {
-    "electron": "43.6.0",
+    "electron": "44.6.0",
     "electron-builder": "26.15.3"
   },
   "build": {
@@ -39,7 +40,8 @@
       "!node_modules/@img/**",
       "!node_modules/sharp/**",
       "!node_modules/onnxruntime-node/**",
-      "recording-store.js"
+      "recording-store.js",
+      "token-store.js"
     ],
     "directories": {
       "output": "release"
@@ -63,7 +65,7 @@
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.inherit.plist",
       "strictVerify": true,
-      "minimumSystemVersion": "12.0",
+      "minimumSystemVersion": "13.0",
       "category": "public.app-category.productivity",
       "icon": "icon.png",
       "extendInfo": {

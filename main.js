@@ -4,17 +4,64 @@
 // loopback, it records the BlackHole 2ch virtual device (which shows up as a normal audio
 // INPUT). So there is NO setDisplayMediaRequestHandler here — both tracks come from
 // getUserMedia in the renderer. Main stays the trusted shell: window, encrypted token
-// storage, and the local-recording (offline) queue.
+// storage (memory-only, never plaintext, when the Keychain cannot encrypt), the
+// local-recording (offline) queue, and refusing navigation/new windows/IPC from anything
+// but the app's own page.
 const { app, BrowserWindow, ipcMain, shell, safeStorage } = require('electron')
 const { autoUpdater } = require('electron-updater')
 const path = require('node:path')
 const fs = require('node:fs/promises')
+const { fileURLToPath } = require('node:url')
+const { createTokenStore } = require('./token-store')
 
 const USER_DATA = () => app.getPath('userData')
 const AUTH_FILE = () => path.join(USER_DATA(), 'auth.bin')
 const REC_DIR = () => path.join(USER_DATA(), 'recordings')
 
 let mainWindow = null
+
+// ---------- shell hardening ----------
+// The only page this app shows is its own renderer/index.html. A navigation or a new window
+// to anything else is refused, and IPC is answered only when it comes from that page (top
+// frame), so a page that somehow got the preload cannot reach the token or the recordings.
+const APP_PAGE = path.join(__dirname, 'renderer', 'index.html')
+
+function isAppPage(url) {
+  try {
+    const u = new URL(String(url || ''))
+    if (u.protocol !== 'file:') return false
+    const file = path.normalize(fileURLToPath(u)) // ignores ?query and #hash
+    return process.platform === 'win32' ? file.toLowerCase() === APP_PAGE.toLowerCase() : file === APP_PAGE
+  } catch {
+    return false
+  }
+}
+
+app.on('web-contents-created', (_event, contents) => {
+  contents.on('will-navigate', (event, url) => {
+    if (isAppPage(url)) return
+    event.preventDefault()
+    console.warn(`[forgenotes] blocked navigation to ${url}`)
+  })
+  contents.on('will-attach-webview', (event) => event.preventDefault())
+  contents.setWindowOpenHandler(({ url }) => {
+    // External links go through the open:external IPC (http/https only); the app never
+    // opens windows of its own.
+    console.warn(`[forgenotes] blocked new window for ${url}`)
+    return { action: 'deny' }
+  })
+})
+
+function handle(channel, listener) {
+  ipcMain.handle(channel, (event, ...args) => {
+    const frame = event.senderFrame
+    if (!frame || frame.parent || !isAppPage(frame.url)) {
+      console.warn(`[forgenotes] refused IPC ${channel} from ${frame ? frame.url : 'a destroyed frame'}`)
+      throw new Error('ipc_sender_rejected')
+    }
+    return listener(event, ...args)
+  })
+}
 
 async function loadConfig() {
   // A real user config (userData for packaged installs, repo config.json for dev) wins.
@@ -68,11 +115,11 @@ function createWindow() {
   })
 
   mainWindow.setMenuBarVisibility(false)
-  mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'))
+  mainWindow.loadFile(APP_PAGE)
 }
 
 // ---------- IPC: config ----------
-ipcMain.handle('config:get', async () => {
+handle('config:get', async () => {
   const cfg = await loadConfig()
   return {
     supabaseUrl: cfg.supabaseUrl || '',
@@ -88,7 +135,7 @@ ipcMain.handle('config:get', async () => {
 // default. The page's CSP only lets the renderer connect to https:, so it cannot fetch the
 // file itself; main reads it (this also works from inside app.asar). null = no list, and
 // the renderer then reports that the announcement could not be played.
-ipcMain.handle('announce:voices', async () => {
+handle('announce:voices', async () => {
   try {
     return JSON.parse(await fs.readFile(path.join(__dirname, 'renderer', 'announce', 'voices.json'), 'utf8'))
   } catch (e) {
@@ -98,44 +145,41 @@ ipcMain.handle('announce:voices', async () => {
 })
 
 // ---------- IPC: encrypted token storage ----------
-ipcMain.handle('secure:get', async () => {
+// Encrypted on disk when safeStorage (the Keychain) can encrypt; otherwise memory-only for
+// this run (the reason is logged to the console and upload-log.txt). See token-store.js.
+let tokenStore = null
+const tokens = () =>
+  tokenStore ||
+  (tokenStore = createTokenStore({
+    file: AUTH_FILE(),
+    safeStorage,
+    log: (line) => {
+      console.warn(`[forgenotes] ${line}`)
+      void appendLog(line)
+    },
+  }))
+
+handle('secure:get', async () => {
   try {
-    const buf = await fs.readFile(AUTH_FILE())
-    if (!safeStorage.isEncryptionAvailable()) return buf.toString('utf8')
-    return safeStorage.decryptString(buf)
+    return await tokens().get()
   } catch {
     return null
   }
 })
 
-ipcMain.handle('secure:set', async (_e, token) => {
-  if (!token) return false
-  const data = safeStorage.isEncryptionAvailable()
-    ? safeStorage.encryptString(String(token))
-    : Buffer.from(String(token), 'utf8')
-  await fs.mkdir(USER_DATA(), { recursive: true })
-  await fs.writeFile(AUTH_FILE(), data)
-  return true
-})
+handle('secure:set', async (_e, token) => tokens().set(token))
 
-ipcMain.handle('secure:clear', async () => {
-  try {
-    await fs.unlink(AUTH_FILE())
-  } catch {
-    // already gone
-  }
-  return true
-})
+handle('secure:clear', async () => tokens().clear())
 
 // ---------- IPC: external links ----------
-ipcMain.handle('open:external', async (_e, url) => {
+handle('open:external', async (_e, url) => {
   if (typeof url === 'string' && /^https?:\/\//i.test(url)) await shell.openExternal(url)
   return true
 })
 
 // Free disk space on the recordings volume (preflight). statfs is Node 18.15+/Electron;
 // returns null if unavailable so the renderer degrades gracefully (recording still works).
-ipcMain.handle('disk:free', async () => {
+handle('disk:free', async () => {
   try {
     if (typeof fs.statfs !== 'function') return null
     const s = await fs.statfs(USER_DATA())
@@ -167,7 +211,7 @@ async function appendLog(line) {
   return true
 }
 
-ipcMain.handle('log:append', async (_e, line) => appendLog(line))
+handle('log:append', async (_e, line) => appendLog(line))
 
 // ---------- auto-update ----------
 // Updates download quietly in the background and are applied the next time the user
@@ -217,19 +261,19 @@ function initAutoUpdate() {
 }
 
 // The renderer loads after the first events may already have fired, so let it ask.
-ipcMain.handle('update:state', async () => updateState)
+handle('update:state', async () => updateState)
 
 // ---------- IPC: local recording fallback / offline queue ----------
 const { recordingStore } = require('./recording-store')
 const store = () => recordingStore(REC_DIR())
 let recordings
 const localStore = () => recordings || (recordings = store())
-ipcMain.handle('rec:checkpoint', (_e, { localId, meta, segment }) => localStore().checkpoint(localId, meta, segment))
-ipcMain.handle('rec:finish', (_e, localId) => localStore().update(localId, { state: 'saved' }))
-ipcMain.handle('rec:uploaded', (_e, { localId, sessionId }) => localStore().update(localId, { state: 'uploaded', sessionId }))
-ipcMain.handle('rec:segment', (_e, { localId, segment }) => localStore().readSegment(localId, segment))
-ipcMain.handle('rec:playback', (_e, localId) => localStore().playback(localId))
-ipcMain.handle('rec:folder', async (_e, localId) => {
+handle('rec:checkpoint', (_e, { localId, meta, segment }) => localStore().checkpoint(localId, meta, segment))
+handle('rec:finish', (_e, localId) => localStore().update(localId, { state: 'saved' }))
+handle('rec:uploaded', (_e, { localId, sessionId }) => localStore().update(localId, { state: 'uploaded', sessionId }))
+handle('rec:segment', (_e, { localId, segment }) => localStore().readSegment(localId, segment))
+handle('rec:playback', (_e, localId) => localStore().playback(localId))
+handle('rec:folder', async (_e, localId) => {
   const dir = localStore().directory(localId)
   if (!(await fs.stat(dir)).isDirectory()) throw new Error('recording_folder_missing')
   const error = await shell.openPath(dir)
@@ -241,7 +285,7 @@ function safeId(id) {
   return id
 }
 
-ipcMain.handle('rec:save', async (_e, { localId, meta, segments }) => {
+handle('rec:save', async (_e, { localId, meta, segments }) => {
   const id = safeId(localId)
   if (!id) throw new Error('invalid_local_id')
   const dir = path.join(REC_DIR(), id)
@@ -255,7 +299,7 @@ ipcMain.handle('rec:save', async (_e, { localId, meta, segments }) => {
   return true
 })
 
-ipcMain.handle('rec:list', async () => {
+handle('rec:list', async () => {
   const out = []
   let entries = []
   try {
@@ -276,7 +320,7 @@ ipcMain.handle('rec:list', async () => {
   return out
 })
 
-ipcMain.handle('rec:read', async (_e, localId) => {
+handle('rec:read', async (_e, localId) => {
   const id = safeId(localId)
   const dir = path.join(REC_DIR(), id)
   const meta = JSON.parse(await fs.readFile(path.join(dir, 'meta.json'), 'utf8'))
@@ -293,7 +337,7 @@ ipcMain.handle('rec:read', async (_e, localId) => {
   return { meta, segments }
 })
 
-ipcMain.handle('rec:delete', async (_e, localId) => {
+handle('rec:delete', async (_e, localId) => {
   const id = safeId(localId)
   if (!id) return false
   const target = localStore().directory(id)
