@@ -68,6 +68,10 @@ npm start
 
 Authentication is retained through Electron `safeStorage`. Use **Record locally** without signing in. **Stop & save** keeps audio on this device; the local library offers playback, folder access and optional **Upload & transcribe**. Auto-upload is opt-in. Successful uploads retain local copies until you discard them. Completed one-minute segments are checkpointed during capture; a crash can lose the current segment and an in-flight disk write.
 
+**Stop a recording by itself** is off unless you choose a time (Never, 5, 10 or 20 minutes). It is the same setting as on the web: it is kept with your account and this app uses the last value it saw (signed out, it is kept on this Mac). When every captured track (microphone and call audio) has been quiet for that long minus a minute, the app asks “Still there?” with a chime, a notification, a bouncing Dock icon and the window title, and stops a minute later if nobody chooses **Keep recording**. Nothing is trimmed: the quiet part is kept and uploaded like the rest.
+
+**Times.** A meeting's start and end are the recording's own (`started_at` / `ended_at`, kept in `meta.json`), however late it is uploaded. Segment offsets and durations, and the length sent at upload, count captured audio only: the recording's clock stops while paused and while the Mac sleeps. A sleep ends the current segment and waking starts a new one.
+
 ## Reproducible internal build
 
 The build refuses to package a missing or privileged Supabase key. Set the public anon JWT in the

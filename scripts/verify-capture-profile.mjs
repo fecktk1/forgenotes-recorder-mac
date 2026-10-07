@@ -24,6 +24,28 @@ if (!app.includes("profile === 'remote_dual_track' && $('system-source')")) {
 if (app.split('announceRecording(').length !== 3) {
   throw new Error('the recording announcement must be fired from exactly one place (a fresh start)')
 }
+// Capture times and stop on silence: capture-clock.js and silence.js load before app.js,
+// every new session sends the recording's own start and end, the segment clock is the
+// sleep-aware one, and the "Still there?" pieces are on the page.
+const scriptOrder = ['capture-clock.js', 'silence.js', 'app.js'].map((name) => html.indexOf(`<script src="${name}"></script>`))
+if (scriptOrder.some((at) => at < 0) || !(scriptOrder[0] < scriptOrder[2] && scriptOrder[1] < scriptOrder[2])) {
+  throw new Error('index.html must load capture-clock.js and silence.js before app.js')
+}
+for (const token of [
+  '...FnCaptureClock.createSessionTimes(meta, localId)',
+  'FnCaptureClock.finalizeTimes(meta, localId, seqd)',
+  'clock: FnCaptureClock.createCaptureClock(startedAt)',
+  'window.desktop.onPower(onPower)',
+  'window.desktop.onSilenceKeep(keepRecording)',
+  'startedAt: new Date(startedAt).toISOString()',
+]) {
+  if (!app.includes(token)) throw new Error(`missing capture-time contract: ${token}`)
+}
+if (/Date\.now\(\) - rec\.startedAt/.test(app)) throw new Error('segment offsets must come from the recording clock, not the wall clock')
+for (const id of ['silence-minutes', 'silence-question', 'silence-keep', 'stop-note']) {
+  if (!html.includes(`id="${id}"`)) throw new Error(`missing stop-on-silence element: #${id}`)
+}
+
 // The announcement is a pre-rendered clip, never the system speech voice.
 if (/speechSynthesis/i.test(app)) {
   throw new Error('renderer/app.js must not use speechSynthesis: the announcement plays a shipped voice clip')
