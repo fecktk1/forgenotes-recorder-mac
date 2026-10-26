@@ -5,6 +5,11 @@ const { contextBridge, ipcRenderer } = require('electron')
 contextBridge.exposeInMainWorld('desktop', {
   getConfig: () => ipcRenderer.invoke('config:get'),
 
+  // Call audio: whether this Mac can record it natively (macOS 14.2+), and a button target
+  // for the System Settings pane that lists the apps allowed to record system audio.
+  systemAudioInfo: () => ipcRenderer.invoke('system-audio:info'),
+  openSystemAudioSettings: () => ipcRenderer.invoke('system-audio:open-settings'),
+
   // The shipped recording-announcement voices (renderer/announce/voices.json); null if unreadable.
   announceVoices: () => ipcRenderer.invoke('announce:voices'),
 

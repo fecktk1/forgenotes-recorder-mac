@@ -19,7 +19,10 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - run: npm audit --audit-level=low
       - run: npm run verify
       - run: npm test
       - run: npm run test:media-runtime
+      - run: npm run test:recorder-ui
+      # Last, so that an advisory in a build-time dependency still fails the job but no
+      # longer hides whether the recorder itself works.
+      - run: npm audit --audit-level=low

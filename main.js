@@ -1,20 +1,64 @@
 // ForgeNotes Recorder (macOS) — Electron main process.
 //
-// macOS captures system/call audio differently from Windows: instead of a screen-share
-// loopback, it records the BlackHole 2ch virtual device (which shows up as a normal audio
-// INPUT). So there is NO setDisplayMediaRequestHandler here — both tracks come from
-// getUserMedia in the renderer. Main stays the trusted shell: window, encrypted token
-// storage, and the local-recording (offline) queue.
-const { app, BrowserWindow, ipcMain, shell, safeStorage } = require('electron')
+// Call audio (the other side of a call) is captured in one of two ways, never both:
+//
+//   * macOS 14.2 and later: natively. The renderer asks for getDisplayMedia({ audio }) and
+//     the handler below answers with Electron's system-audio loopback, which Chromium
+//     implements with a Core Audio tap. Audio only: no video source is ever granted, so the
+//     Screen Recording permission is not involved. macOS asks the user once
+//     (NSAudioCaptureUsageDescription, "System Audio Recording Only").
+//   * macOS 12.0 to 14.1, or by choice: the BlackHole 2ch virtual device, which shows up as
+//     a normal audio INPUT and is opened with getUserMedia in the renderer. The handler
+//     refuses every request on those versions.
+//
+// Which one applies is decided in renderer/system-audio.js (shared with the renderer and
+// the tests). Main stays the trusted shell: window, encrypted token storage, the
+// local-recording (offline) queue, and the gate on system audio.
+const { app, BrowserWindow, ipcMain, shell, safeStorage, session } = require('electron')
 const { autoUpdater } = require('electron-updater')
 const path = require('node:path')
 const fs = require('node:fs/promises')
+const systemAudio = require('./renderer/system-audio.js')
 
 const USER_DATA = () => app.getPath('userData')
 const AUTH_FILE = () => path.join(USER_DATA(), 'auth.bin')
 const REC_DIR = () => path.join(USER_DATA(), 'recordings')
 
 let mainWindow = null
+
+// ---------- system audio (call audio) ----------
+// Development only: FORGENOTES_FAKE_MACOS_VERSION=13.6 npm start shows what an older Mac
+// shows (the BlackHole path) on a newer one. Ignored in a packaged app.
+const SYSTEM_VERSION = (!app.isPackaged && process.env.FORGENOTES_FAKE_MACOS_VERSION) || process.getSystemVersion()
+const NATIVE_SYSTEM_AUDIO = systemAudio.nativeSupported({ platform: process.platform, systemVersion: SYSTEM_VERSION })
+
+// Chromium blocks its audio service on the macOS permission window the first time a tap is
+// opened. If nobody answers for a minute the call times out and, by Chromium's own account
+// (media/audio/mac/catap_audio_input_stream.mm), every later Core Audio call in that process
+// fails until it is restarted. This feature makes Chromium restart the audio service itself
+// in that case; the renderer then reopens its streams. Must be set before the app is ready.
+if (NATIVE_SYSTEM_AUDIO) app.commandLine.appendSwitch('enable-features', 'MacCatapRestartAudioProcessOnTimeout')
+
+function isRecorderFrame(frame) {
+  if (!frame || !mainWindow || mainWindow.isDestroyed()) return false
+  const own = mainWindow.webContents.mainFrame
+  return frame.processId === own.processId && frame.routingId === own.routingId
+}
+
+function installSystemAudioHandler() {
+  session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
+    let trustedFrame = false
+    try {
+      trustedFrame = isRecorderFrame(request.frame)
+    } catch {
+      // the frame went away while the request was in flight
+    }
+    const answer = systemAudio.displayMediaResponse(request, { nativeSupported: NATIVE_SYSTEM_AUDIO, trustedFrame })
+    appendLog(`system-audio: capture request ${answer ? 'answered with native loopback' : 'refused'} (macOS ${SYSTEM_VERSION})`)
+    if (answer) callback(answer)
+    else callback() // getDisplayMedia() rejects in the renderer
+  })
+}
 
 async function loadConfig() {
   // A real user config (userData for packaged installs, repo config.json for dev) wins.
@@ -80,6 +124,25 @@ ipcMain.handle('config:get', async () => {
     forgenotesHost: cfg.forgenotesHost || 'https://notes.thecontentforge.io',
     version: app.getVersion(),
     _parseError: cfg._parseError || null,
+  }
+})
+
+// ---------- IPC: system audio ----------
+ipcMain.handle('system-audio:info', async () => ({
+  platform: process.platform,
+  systemVersion: SYSTEM_VERSION,
+  nativeSupported: NATIVE_SYSTEM_AUDIO,
+  nativeMinVersion: systemAudio.NATIVE_MIN_MACOS_LABEL,
+}))
+
+// Opens the pane where macOS lists the apps allowed to record system audio. A fixed
+// address: the renderer cannot make main open anything else through this call.
+ipcMain.handle('system-audio:open-settings', async () => {
+  try {
+    await shell.openExternal('x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_AudioCapture')
+    return true
+  } catch {
+    return false
   }
 })
 
@@ -303,6 +366,7 @@ ipcMain.handle('rec:delete', async (_e, localId) => {
 
 // ---------- lifecycle ----------
 app.whenReady().then(() => {
+  installSystemAudioHandler()
   createWindow()
   initAutoUpdate()
   app.on('activate', () => {
