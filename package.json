@@ -22,7 +22,7 @@
     "electron-updater": "6.8.9"
   },
   "devDependencies": {
-    "electron": "43.6.0",
+    "electron": "43.8.3",
     "electron-builder": "26.15.3"
   },
   "build": {
@@ -72,9 +72,9 @@
     }
   },
   "overrides": {
-    "fast-uri": "3.1.6",
-    "js-yaml": "4.3.1",
+    "fast-uri": "3.1.9",
+    "js-yaml": "4.3.2",
     "@xmldom/xmldom": "0.8.15",
-    "sharp": "0.35.3"
+    "sharp": "0.35.5"
   }
 }
