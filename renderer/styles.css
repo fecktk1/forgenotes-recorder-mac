@@ -130,6 +130,19 @@ html, body {
 .announce-voice .field { flex: 1; min-width: 0; }
 .announce-note { margin: 0; font-size: 12px; line-height: 1.4; color: var(--warn); }
 
+/* Stop on silence: the setting, and the "Still there?" question while it is up. */
+.silence-setting { display: flex; flex-direction: column; gap: 8px; }
+.silence-setting .hint { margin: 0; }
+.silence-setting .hint.saved-ok { color: var(--ok); }
+.silence-setting .hint.saved-error { color: var(--danger); }
+.btn.link.small-link { font-size: 11px; }
+.silence-question {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 9px 11px; border-radius: 8px;
+  background: rgba(251, 191, 36, 0.1); border: 1px solid rgba(251, 191, 36, 0.4);
+}
+.silence-question p { margin: 0; flex: 1 1 200px; font-size: 13px; line-height: 1.4; color: var(--warn); }
+
 .controls { display: flex; gap: 10px; align-items: center; }
 
 .btn {

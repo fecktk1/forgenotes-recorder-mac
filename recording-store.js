@@ -2,6 +2,20 @@ const fs = require('node:fs/promises')
 const path = require('node:path')
 const { pathToFileURL } = require('node:url')
 
+// Why a recording ended, as the renderer reports it at Stop.
+const STOP_REASONS = new Set(['manual', 'silence', 'save_failed', 'device_lost'])
+
+// The fields a finished recording may add to its meta.json, from the renderer: when it
+// ended (sent to the server as ended_at) and why. Anything else is dropped.
+function finishDetails(details) {
+  const out = {}
+  if (!details || typeof details !== 'object') return out
+  const ended = typeof details.endedAt === 'string' ? Date.parse(details.endedAt) : NaN
+  if (Number.isFinite(ended) && ended > 0) out.endedAt = new Date(ended).toISOString()
+  if (STOP_REASONS.has(details.stopReason)) out.stopReason = details.stopReason
+  return out
+}
+
 function recordingStore(root) {
   root = path.resolve(root)
   const queues = new Map()
@@ -47,8 +61,11 @@ function recordingStore(root) {
       const segments = (saved.segments || []).filter((s) => s.track !== record.track || s.seq !== record.seq)
       segments.push(record)
       segments.sort((a, b) => a.startOffsetMs - b.startOffsetMs || a.track.localeCompare(b.track))
+      // checkpointedAt: when the newest segment reached the disk. For a recording cut off by
+      // a crash or power loss (no Stop, so no endedAt) it is the best known end.
       await atomic(path.join(dir, 'meta.json'), JSON.stringify({ ...saved, ...meta, state: 'recording', segments,
-        tracks: [...new Set(segments.map((s) => s.track))], durationSec: Math.ceil(Math.max(...segments.map((s) => (s.startOffsetMs + s.durationMs) / 1000))) }))
+        tracks: [...new Set(segments.map((s) => s.track))], durationSec: Math.ceil(Math.max(...segments.map((s) => (s.startOffsetMs + s.durationMs) / 1000))),
+        checkpointedAt: new Date().toISOString() }))
       return record
     })
   }
@@ -57,6 +74,10 @@ function recordingStore(root) {
       const saved = await metadata(id)
       await atomic(path.join(directory(id), 'meta.json'), JSON.stringify({ ...saved, ...patch }))
     })
+  }
+  // Stop: the recording is complete on disk. details: { endedAt, stopReason } (see finishDetails).
+  async function finish(id, details) {
+    return update(id, { state: 'saved', ...finishDetails(details) })
   }
   async function readSegment(id, segment) {
     const buf = await fs.readFile(path.join(directory(id), segmentName(segment)))
@@ -70,10 +91,12 @@ function recordingStore(root) {
       const file = path.join(directory(id), segmentName(segment))
       const stat = await fs.stat(file) // missing chunks must never silently disappear
       if (segment.bytes && stat.size !== segment.bytes) throw new Error('recording_segment_incomplete')
-      files.push({ ...segment, url: pathToFileURL(file).href })
+      // writtenAt: when the segment file was written, the end of a recording saved by a build
+      // that did not keep endedAt or checkpointedAt.
+      files.push({ ...segment, url: pathToFileURL(file).href, writtenAt: stat.mtime.toISOString() })
     }
     return { meta, files }
   }
-  return { directory, metadata, checkpoint, update, readSegment, playback }
+  return { directory, metadata, checkpoint, update, finish, readSegment, playback }
 }
-module.exports = { recordingStore }
+module.exports = { recordingStore, finishDetails }
