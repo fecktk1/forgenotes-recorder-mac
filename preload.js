@@ -15,6 +15,9 @@ contextBridge.exposeInMainWorld('desktop', {
 
   openExternal: (url) => ipcRenderer.invoke('open:external', url),
 
+  // This install's opaque id for ForgeNotes (device-id.js in main); null when it cannot be kept.
+  deviceId: () => ipcRenderer.invoke('device:id'),
+
   // Free disk space on the recordings volume (preflight); null if unavailable.
   diskFree: () => ipcRenderer.invoke('disk:free'),
 
