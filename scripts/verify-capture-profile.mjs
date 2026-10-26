@@ -21,6 +21,16 @@ for (const [source, token] of required) {
 if (!app.includes("profile === 'remote_dual_track' && $('system-source')")) {
   throw new Error('room mode must disable macOS system capture')
 }
+// The microphone and the call-audio source must never be the same input (that records
+// the call twice and the user's voice not at all): input-devices.js answers it, it loads
+// before app.js, and Start checks both the selected ids and the opened tracks.
+const devicesTag = html.indexOf('<script src="input-devices.js"></script>')
+if (devicesTag < 0 || devicesTag > html.indexOf('<script src="app.js"></script>')) {
+  throw new Error('index.html must load input-devices.js before app.js')
+}
+for (const token of ['FnInputDevices.sameInput(micId, systemId, inputs)', 'FnInputDevices.sameOpenedInput(', 'FnInputDevices.distinctMicId(']) {
+  if (!app.includes(token)) throw new Error(`missing same-input guard: ${token}`)
+}
 if (app.split('announceRecording(').length !== 3) {
   throw new Error('the recording announcement must be fired from exactly one place (a fresh start)')
 }
