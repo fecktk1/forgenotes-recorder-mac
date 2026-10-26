@@ -30,10 +30,28 @@ contextBridge.exposeInMainWorld('desktop', {
     return () => ipcRenderer.removeListener('update:state', handler)
   },
 
+  // The Mac going to sleep and waking: { state: 'suspend' | 'resume', at: ms }.
+  onPower: (cb) => {
+    const handler = (_e, event) => cb(event)
+    ipcRenderer.on('power:state', handler)
+    return () => ipcRenderer.removeListener('power:state', handler)
+  },
+
+  // Stop on silence: raise and clear the "Still there?" notification; onSilenceKeep fires
+  // when the person answers it.
+  silenceAsk: (body) => ipcRenderer.invoke('silence:ask', { body }),
+  silenceClear: () => ipcRenderer.invoke('silence:clear'),
+  onSilenceKeep: (cb) => {
+    const handler = () => cb()
+    ipcRenderer.on('silence:keep', handler)
+    return () => ipcRenderer.removeListener('silence:keep', handler)
+  },
+
   // Local recording fallback / offline queue. Blobs cross IPC as ArrayBuffers.
   saveRecording: (localId, meta, segments) => ipcRenderer.invoke('rec:save', { localId, meta, segments }),
   checkpoint: (localId, meta, segment) => ipcRenderer.invoke('rec:checkpoint', { localId, meta, segment }),
-  finishRecording: (localId) => ipcRenderer.invoke('rec:finish', localId),
+  // details: { endedAt (ISO), stopReason }.
+  finishRecording: (localId, details) => ipcRenderer.invoke('rec:finish', { localId, details }),
   markUploaded: (localId, sessionId) => ipcRenderer.invoke('rec:uploaded', { localId, sessionId }),
   readSegment: (localId, segment) => ipcRenderer.invoke('rec:segment', { localId, segment }),
   playback: (localId) => ipcRenderer.invoke('rec:playback', localId),
