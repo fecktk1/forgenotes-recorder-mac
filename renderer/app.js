@@ -36,7 +36,7 @@ async function boot() {
     if (CFG._parseError) {
       const detail = document.querySelector('#config-error p')
       if (detail) {
-        detail.textContent = `${CFG._parseError}. Open config.json and make sure every value — especially the anon key — is wrapped in double quotes, then restart.`
+        detail.textContent = `${CFG._parseError}. Open config.json and make sure every value — especially the publishable key — is wrapped in double quotes, then restart.`
       }
     }
     show('config-error')
@@ -77,13 +77,22 @@ function wireUpdateBadge(verEl) {
 
 // ---------------------------------------------------------------- auth (GoTrue REST)
 async function signIn(email, password) {
-  const res = await fetch(`${CFG.supabaseUrl}/auth/v1/token?grant_type=password`, {
-    method: 'POST',
-    headers: { apikey: CFG.supabaseAnonKey, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password }),
-  })
+  let res
+  try {
+    res = await fetch(`${CFG.supabaseUrl}/auth/v1/token?grant_type=password`, {
+      method: 'POST',
+      headers: { apikey: CFG.supabaseAnonKey, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    })
+  } catch {
+    throw new Error(FnSignIn.OFFLINE)
+  }
   const data = await res.json().catch(() => ({}))
-  if (!res.ok) throw new Error(data.error_description || data.msg || data.error || 'Sign-in failed')
+  if (!res.ok) {
+    // The server's own words go to the log for support; the person gets FnSignIn's copy.
+    await diag(['sign-in refused: HTTP', res.status, data.error_code, data.msg || data.error_description || data.message].filter(Boolean).join(' '))
+    throw new Error(FnSignIn.signInFailureMessage(res.status, data))
+  }
   setAuth(data)
 }
 
@@ -94,6 +103,8 @@ async function refreshSession(refreshToken) {
     body: JSON.stringify({ refresh_token: refreshToken }),
   })
   const data = await res.json().catch(() => ({}))
+  // A refused key is this build's problem, not the session's: say so instead of "session_expired".
+  if (FnSignIn.isAppKeyRefused(res.status, data)) throw new Error(FnSignIn.APP_KEY_REFUSED)
   if (!res.ok || !data.access_token) throw new Error('session_expired')
   setAuth(data)
 }
