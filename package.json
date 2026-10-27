@@ -20,7 +20,7 @@
   },
   "dependencies": {
     "@huggingface/transformers": "^3.8.1",
-    "electron-updater": "6.8.9"
+    "electron-updater": "6.8.11"
   },
   "devDependencies": {
     "electron": "43.8.3",
