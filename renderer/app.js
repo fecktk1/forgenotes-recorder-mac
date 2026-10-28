@@ -25,6 +25,7 @@ const ANNOUNCE_VOICES_WAIT_MS = 1000 // longest the announcement waits for the v
 const ANNOUNCE_START_TIMEOUT_MS = 5000 // the clip never started playing — tell the user
 
 let CFG = null
+let analytics = null
 let auth = null // { access_token, refresh_token, expires_at(ms), email }
 let rec = null // active recording state
 let preflightMeter = null // live mic meter used by the pre-record device check
@@ -38,6 +39,14 @@ async function boot() {
   const verEl = $('app-version')
   if (verEl && CFG.version) verEl.textContent = `v${CFG.version}`
   wireUpdateBadge(verEl)
+  analytics = FnAnalytics.createAnalytics({ rpc: callRpc, platform: 'macos', version: CFG.version || 'unknown' })
+  $('analytics-choice').addEventListener('change', async event => {
+    const desired = event.target.checked
+    event.target.disabled = true
+    try { event.target.checked = await analytics.setEnabled(desired); $('analytics-status').textContent = 'Account preference saved.' }
+    catch { event.target.checked = false; $('analytics-status').textContent = 'Could not save. Analytics is off on this device; retry to update your account.' }
+    finally { event.target.disabled = false }
+  })
   wireEvents()
   if (CFG._parseError || !CFG.supabaseUrl || !CFG.supabaseAnonKey) {
     if (CFG._parseError) {
@@ -118,12 +127,14 @@ async function refreshSession(refreshToken) {
 
 function setAuth(data) {
   auth = {
+    user_id: data.user?.id || auth?.user_id,
     access_token: data.access_token,
     refresh_token: data.refresh_token,
     expires_at: data.expires_at ? data.expires_at * 1000 : Date.now() + (data.expires_in || 3600) * 1000,
     email: (data.user && data.user.email) || (auth && auth.email) || '',
   }
   window.desktop.secureSet(data.refresh_token)
+  void analytics?.identify(auth.user_id).then(value => { $('analytics-choice').checked = value })
 }
 
 async function getToken() {
@@ -133,6 +144,8 @@ async function getToken() {
 }
 
 async function signOut() {
+  analytics?.reset()
+  $('analytics-choice').checked = false
   auth = null
   stopPreflightMeter()
   await window.desktop.secureClear()
@@ -141,7 +154,11 @@ async function signOut() {
 }
 
 // ---------------------------------------------------------------- edge fn call
-async function callFn(name, { body, formData } = {}) {
+async function callFn(name, options = {}) {
+  return analytics.operation(name, () => callFnRaw(name, options))
+}
+
+async function callFnRaw(name, { body, formData } = {}) {
   const token = await getToken()
   const headers = { apikey: CFG.supabaseAnonKey, Authorization: `Bearer ${token}` }
   if (!formData) headers['Content-Type'] = 'application/json'
@@ -177,8 +194,9 @@ async function callFn(name, { body, formData } = {}) {
 
 // ---------------------------------------------------------------- database function call
 // PostgREST RPC as the signed-in person (the capture setting lives behind two of these).
-async function callRpc(name, args) {
+async function callRpc(name, args, expectedUser) {
   const token = await getToken()
+  if (expectedUser && auth?.user_id !== expectedUser) throw new Error('Account changed')
   const res = await fetch(`${CFG.supabaseUrl}/rest/v1/rpc/${name}`, {
     method: 'POST',
     headers: { apikey: CFG.supabaseAnonKey, Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
@@ -1045,6 +1063,7 @@ async function startRecording() {
     stopping: false,
   }
   startSegments(rec)
+  void analytics?.capture('recording_started')
   rec.rotateTimer = setInterval(rotate, ROTATE_MS)
 
   // Capture is live — say the notice now so it is part of the recording. Only here, on a
@@ -1218,6 +1237,7 @@ async function stopRecording(reason = 'manual') {
   try {
     await current.writes
     await window.desktop.finishRecording(localId, { endedAt, stopReason: reason })
+    void analytics?.capture('recording_stopped')
     await refreshPending()
   } catch (e) {
     await refreshPending().catch(() => {})
@@ -1389,6 +1409,7 @@ async function uploadSegments(localId, meta, seqd) {
     const sessionStatus = String((created.session && created.session.status) || '')
     if (created.existing && sessionStatus && sessionStatus !== 'created' && sessionStatus !== 'uploading') {
       await window.desktop.markUploaded(localId, sessionId)
+      void analytics?.capture('upload_completed')
       await refreshPending()
       await diag(`upload skipped for ${localId}: session ${sessionId} already ${sessionStatus}`)
       showUploaded(sessionId, 'Already uploaded — ForgeNotes has this meeting.')
@@ -1421,6 +1442,7 @@ async function uploadSegments(localId, meta, seqd) {
     })
 
     await window.desktop.markUploaded(localId, sessionId)
+      void analytics?.capture('upload_completed')
     await refreshPending()
     await diag(`upload complete ${localId} -> session ${sessionId} (${seqd.length} segments, ${resumed} resumed)`)
 
