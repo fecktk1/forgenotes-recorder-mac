@@ -24,6 +24,7 @@ const ANNOUNCE_VOICE_KEY = 'fn_announce_voice' // localStorage: a voice id from 
 const ANNOUNCE_VOICES_WAIT_MS = 1000 // longest the announcement waits for the voice list
 const ANNOUNCE_START_TIMEOUT_MS = 5000 // the clip never started playing — tell the user
 
+let filingOrgId = null
 let CFG = null
 let analytics = null
 let auth = null // { access_token, refresh_token, expires_at(ms), email }
@@ -131,6 +132,7 @@ function setAuth(data) {
     access_token: data.access_token,
     refresh_token: data.refresh_token,
     expires_at: data.expires_at ? data.expires_at * 1000 : Date.now() + (data.expires_in || 3600) * 1000,
+    user_id: data.user?.id || auth?.user_id || null,
     email: (data.user && data.user.email) || (auth && auth.email) || '',
   }
   window.desktop.secureSet(data.refresh_token)
@@ -147,6 +149,8 @@ async function signOut() {
   analytics?.reset()
   $('analytics-choice').checked = false
   auth = null
+  filingOrgId = null
+  $('visibility').replaceChildren(new Option('Private', 'private'))
   stopPreflightMeter()
   await window.desktop.secureClear()
   hide('recorder-view')
@@ -212,7 +216,32 @@ async function callRpc(name, args, expectedUser) {
 }
 
 // ---------------------------------------------------------------- recorder view
+// Only the server-verified access answer may add organization audiences.
+async function refreshFilingOptions() {
+  let access = null
+  const identity = auth?.user_id || auth?.email || null
+  if (identity) {
+    try {
+      const token = await getToken()
+      const response = await fetch(`${CFG.supabaseUrl}/rest/v1/rpc/forgenotes_my_access`, {
+        method: 'POST', signal: AbortSignal.timeout(5000), headers: { apikey: CFG.supabaseAnonKey, Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: '{}',
+      })
+      if (response.ok) access = await response.json()
+    } catch { /* local capture remains available, private */ }
+  }
+  if (identity !== (auth?.user_id || auth?.email || null)) return
+  const scope = window.forgeNotesFiling.visibilityChoices(access)
+  const select = $('visibility')
+  const previous = scope.orgId === filingOrgId ? select.value : 'private'
+  filingOrgId = scope.orgId
+  select.replaceChildren(...scope.choices.map(([value, label]) => {
+    const option = document.createElement('option'); option.value = value; option.textContent = label; return option
+  }))
+  select.value = scope.choices.some(([value]) => value === previous) ? previous : 'private'
+}
+
 async function enterRecorder() {
+  await refreshFilingOptions()
   hide('login-view')
   show('recorder-view')
   $('account-email').textContent = auth?.email || 'Recording locally'
@@ -1039,6 +1068,7 @@ async function startRecording() {
       source_type: $('source').value,
       capture_profile: profile,
       visibility: $('visibility').value,
+      filing_org_id: filingOrgId,
       template_key: $('template').value,
       tags: $('tags').value,
       // When recording began, kept with the local copy and sent as started_at, however
@@ -1377,7 +1407,7 @@ async function uploadSegments(localId, meta, seqd) {
       title: meta.title || 'Untitled meeting',
       source_type: meta.source_type || 'other',
       capture_profile: meta.capture_profile || (meta.source_type === 'in_person' ? 'room_single_mic' : 'remote_dual_track'),
-      visibility: meta.visibility || 'private',
+      visibility: meta.filing_org_id === filingOrgId ? (meta.visibility || 'private') : 'private',
       // Comma-separated in the field, deduplicated case-insensitively, capped like every
       // other client. Hardcoded [] was the desktop's last dead capture option.
       tags: parseTags(meta.tags),
