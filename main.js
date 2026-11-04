@@ -13,8 +13,10 @@
 //
 // Which one applies is decided in renderer/system-audio.js (shared with the renderer and
 // the tests). Main stays the trusted shell: window, encrypted token storage, the
-// local-recording (offline) queue, and the gate on system audio.
-const { app, BrowserWindow, ipcMain, shell, safeStorage, session } = require('electron')
+// local-recording (offline) queue, and the gate on system audio. It also tells the
+// renderer when the Mac goes to sleep and wakes (the recording's clock leaves the sleep
+// out), and raises the "Still there?" question outside the window.
+const { app, BrowserWindow, ipcMain, shell, safeStorage, session, powerMonitor, Notification } = require('electron')
 const { autoUpdater } = require('electron-updater')
 const path = require('node:path')
 const fs = require('node:fs/promises')
@@ -108,6 +110,11 @@ function createWindow() {
       // Sandboxed preloads can still use Electron's contextBridge/ipcRenderer
       // polyfill; this preload does not need unrestricted Node.js access.
       sandbox: true,
+      // A recorder is mostly used hidden behind the call. Chromium slows the timers of a
+      // hidden page (down to one wake-up a minute after a few minutes), and the
+      // recording's timers must keep time: segment rotation, the sleep heartbeat and the
+      // stop-on-silence readings.
+      backgroundThrottling: false,
     },
   })
 
@@ -189,6 +196,24 @@ ipcMain.handle('secure:clear', async () => {
   }
   return true
 })
+
+// ---------- IPC: this install's device id ----------
+// Sent with each recording's real start so ForgeNotes can tell two installs recording at the
+// same time on one account (see device-id.js). null when it cannot be kept on disk.
+const { createDeviceIdStore } = require('./device-id')
+let deviceIdStore = null
+const deviceIds = () =>
+  deviceIdStore ||
+  (deviceIdStore = createDeviceIdStore({
+    dir: USER_DATA(),
+    prefix: 'mac',
+    log: (line) => {
+      console.warn(`[forgenotes] ${line}`)
+      void appendLog(line)
+    },
+  }))
+
+ipcMain.handle('device:id', async () => deviceIds().get())
 
 // ---------- IPC: external links ----------
 ipcMain.handle('open:external', async (_e, url) => {
@@ -288,7 +313,8 @@ const store = () => recordingStore(REC_DIR())
 let recordings
 const localStore = () => recordings || (recordings = store())
 ipcMain.handle('rec:checkpoint', (_e, { localId, meta, segment }) => localStore().checkpoint(localId, meta, segment))
-ipcMain.handle('rec:finish', (_e, localId) => localStore().update(localId, { state: 'saved' }))
+// details: { endedAt, stopReason }, filtered by recording-store's finishDetails.
+ipcMain.handle('rec:finish', (_e, { localId, details } = {}) => localStore().finish(localId, details))
 ipcMain.handle('rec:uploaded', (_e, { localId, sessionId }) => localStore().update(localId, { state: 'uploaded', sessionId }))
 ipcMain.handle('rec:segment', (_e, { localId, segment }) => localStore().readSegment(localId, segment))
 ipcMain.handle('rec:playback', (_e, localId) => localStore().playback(localId))
@@ -364,11 +390,83 @@ ipcMain.handle('rec:delete', async (_e, localId) => {
   return true
 })
 
+// ---------- sleep and wake ----------
+// Nothing is captured while the Mac sleeps, but the wall clock keeps going: a one-minute
+// segment that spanned a sleep used to claim the whole night as audio (session 0ca7b2a4:
+// 33,550 s). The renderer is told when the Mac suspends and resumes, with the time each
+// event fired here, so it can end the segment at suspend, start a new one at resume and
+// keep the sleep out of the recording's clock (renderer/capture-clock.js). Logged for
+// support as well.
+function sendPower(state) {
+  const at = Date.now()
+  void appendLog(`power: ${state}`)
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('power:state', { state, at })
+}
+
+// ---------- "Still there?" ----------
+// Stop on silence (renderer/silence.js) asks before it stops a recording, and the question
+// has to be noticed by someone who is not looking at this window: the renderer chimes and
+// changes the window title, and main adds a system notification and bounces the Dock icon.
+// Answering the notification is answering "Keep recording".
+let silenceNotice = null // kept referenced so its click handler is not collected
+let dockBounce = null
+
+function clearSilenceAttention() {
+  if (silenceNotice) {
+    const note = silenceNotice
+    silenceNotice = null
+    try { note.close() } catch { /* already gone */ }
+  }
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    try { mainWindow.flashFrame(false) } catch { /* not supported */ }
+  }
+  if (dockBounce !== null && app.dock) {
+    try { app.dock.cancelBounce(dockBounce) } catch { /* not supported */ }
+  }
+  dockBounce = null
+}
+
+ipcMain.handle('silence:ask', async (_e, { body } = {}) => {
+  clearSilenceAttention()
+  const text = typeof body === 'string' ? body.slice(0, 240) : ''
+  try {
+    if (Notification.isSupported()) {
+      const note = new Notification({ title: 'Still there?', body: text, silent: true, timeoutType: 'never' })
+      note.on('click', () => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          if (mainWindow.isMinimized()) mainWindow.restore()
+          mainWindow.show()
+          mainWindow.focus()
+          mainWindow.webContents.send('silence:keep')
+        }
+      })
+      note.show()
+      silenceNotice = note
+    }
+  } catch (e) {
+    console.warn('[forgenotes] could not show the silence notification:', (e && e.message) || e)
+  }
+  if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isFocused()) {
+    try { mainWindow.flashFrame(true) } catch { /* not supported */ }
+    if (app.dock) {
+      try { dockBounce = app.dock.bounce('critical') } catch { dockBounce = null }
+    }
+  }
+  return true
+})
+
+ipcMain.handle('silence:clear', async () => {
+  clearSilenceAttention()
+  return true
+})
+
 // ---------- lifecycle ----------
 app.whenReady().then(() => {
   installSystemAudioHandler()
   createWindow()
   initAutoUpdate()
+  powerMonitor.on('suspend', () => sendPower('suspend'))
+  powerMonitor.on('resume', () => sendPower('resume'))
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })

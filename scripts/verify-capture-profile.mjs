@@ -29,9 +29,44 @@ for (const token of ['id="native-audio-fields"', 'id="blackhole-fields"', 'id="s
 if (!app.includes('getDisplayMedia({ audio: { ...RAW_AUDIO }, video: false })')) {
   throw new Error('native call audio must be requested as audio only (no screen capture)')
 }
+// The microphone and the call-audio source must never be the same input (that records
+// the call twice and the user's voice not at all): input-devices.js answers it, it loads
+// before app.js, and Start checks both the selected ids and the opened tracks.
+const devicesTag = html.indexOf('<script src="input-devices.js"></script>')
+if (devicesTag < 0 || devicesTag > html.indexOf('<script src="app.js"></script>')) {
+  throw new Error('index.html must load input-devices.js before app.js')
+}
+for (const token of ['FnInputDevices.sameInput(micId, systemId, inputs)', 'FnInputDevices.sameOpenedInput(', 'FnInputDevices.distinctMicId(']) {
+  if (!app.includes(token)) throw new Error(`missing same-input guard: ${token}`)
+}
 if (app.split('announceRecording(').length !== 3) {
   throw new Error('the recording announcement must be fired from exactly one place (a fresh start)')
 }
+// Capture times and stop on silence: capture-clock.js and silence.js load before app.js,
+// every new session sends the recording's own start and end, the segment clock is the
+// sleep-aware one, and the "Still there?" pieces are on the page.
+const scriptOrder = ['capture-clock.js', 'silence.js', 'app.js'].map((name) => html.indexOf(`<script src="${name}"></script>`))
+if (scriptOrder.some((at) => at < 0) || !(scriptOrder[0] < scriptOrder[2] && scriptOrder[1] < scriptOrder[2])) {
+  throw new Error('index.html must load capture-clock.js and silence.js before app.js')
+}
+for (const token of [
+  'const times = FnCaptureClock.createSessionTimes(meta, localId)',
+  '...times,',
+  // device_id only with the recording's own start (social-os one-recording rule).
+  'if (times.started_at) {',
+  'FnCaptureClock.finalizeTimes(meta, localId, seqd)',
+  'clock: FnCaptureClock.createCaptureClock(startedAt)',
+  'window.desktop.onPower(onPower)',
+  'window.desktop.onSilenceKeep(keepRecording)',
+  'startedAt: new Date(startedAt).toISOString()',
+]) {
+  if (!app.includes(token)) throw new Error(`missing capture-time contract: ${token}`)
+}
+if (/Date\.now\(\) - rec\.startedAt/.test(app)) throw new Error('segment offsets must come from the recording clock, not the wall clock')
+for (const id of ['silence-minutes', 'silence-question', 'silence-keep', 'stop-note']) {
+  if (!html.includes(`id="${id}"`)) throw new Error(`missing stop-on-silence element: #${id}`)
+}
+
 // The announcement is a pre-rendered clip, never the system speech voice.
 if (/speechSynthesis/i.test(app)) {
   throw new Error('renderer/app.js must not use speechSynthesis: the announcement plays a shipped voice clip')

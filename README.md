@@ -106,11 +106,15 @@ Recorder.
 2. Open **Audio MIDI Setup** and create a **Multi-Output Device**.
 3. Select both your normal speakers/headphones and **BlackHole 2ch**.
 4. Set the Mac's sound output (or the meeting app's speaker) to that Multi-Output Device.
-5. In the recorder, **System audio source** selects BlackHole 2ch automatically.
+5. Leave your Mac's sound **input** on your real microphone, not BlackHole. In the recorder,
+   **Microphone** is the microphone you speak into and the call-audio source is BlackHole 2ch,
+   which the recorder selects automatically.
 
 The recorder's **You** and **Call audio** meters confirm that both tracks are receiving audio. If
 the sound output is switched away from the Multi-Output Device during a recording, call audio
-stops arriving; the app says so.
+stops arriving; the app says so. The two must be different inputs: when the microphone would open
+the call-audio input, the recorder starts on another microphone, the device check flags it, and
+Start records that input once, as the microphone, instead of the same audio twice.
 
 ### Echo on laptop speakers
 
@@ -132,7 +136,7 @@ the call audio found in it. With headphones it reports none. It only reads the f
 nvm use
 npm ci
 cp config.example.json config.json
-# Put only the PUBLIC Supabase anon JWT in config.json.
+# Put only the PUBLIC Supabase publishable key (sb_publishable_…) in config.json.
 npm start
 ```
 
@@ -166,13 +170,19 @@ is rebuilt, so it asks again after every build.
 
 Authentication is retained through Electron `safeStorage`. Use **Record locally** without signing in. **Stop & save** keeps audio on this device; the local library offers playback, folder access and optional **Upload & transcribe**. Auto-upload is opt-in. Successful uploads retain local copies until you discard them. Completed one-minute segments are checkpointed during capture; a crash can lose the current segment and an in-flight disk write.
 
+**Stop a recording by itself** is off unless you choose a time (Never, 5, 10 or 20 minutes). It is the same setting as on the web: it is kept with your account and this app uses the last value it saw (signed out, it is kept on this Mac). When every captured track (microphone and call audio) has been quiet for that long minus a minute, the app asks “Still there?” with a chime, a notification, a bouncing Dock icon and the window title, and stops a minute later if nobody chooses **Keep recording**. Nothing is trimmed: the quiet part is kept and uploaded like the rest.
+
+**Times.** A meeting's start and end are the recording's own (`started_at` / `ended_at`, kept in `meta.json`), however late it is uploaded. Segment offsets and durations, and the length sent at upload, count captured audio only: the recording's clock stops while paused and while the Mac sleeps. A sleep ends the current segment and waking starts a new one.
+
+**This install's id.** Each upload also sends `device_id`: an opaque id made once and kept in `device-id.txt` in the app's data folder (`mac-` and a random UUID). ForgeNotes uses it only for "one live recording at a time per account", and only alongside the recording's own start; it is not sent for a recording whose start is unknown. When the file cannot be written, no id is sent.
+
 ## Reproducible internal build
 
-The build refuses to package a missing or privileged Supabase key. Set the public anon JWT in the
-environment (or provide a validated local `config.json`), then build:
+The build refuses to package a missing, privileged or legacy JWT Supabase key. Set the public
+publishable key in the environment (or provide a validated local `config.json`), then build:
 
 ```sh
-export FORGENOTES_SUPABASE_ANON_KEY='public-anon-jwt'
+export FORGENOTES_SUPABASE_ANON_KEY='sb_publishable_…'
 npm ci
 npm run dist:mac
 ```
@@ -182,7 +192,8 @@ This produces a universal `arm64` + `x86_64` application as `release/ForgeNotes-
 `release/latest-mac.yml` (which is what the auto-updater reads — Squirrel.Mac cannot update
 from a DMG). The build command:
 
-1. validates that the configured Supabase JWT has the `anon` role;
+1. validates that the configured Supabase key is the publishable key (the project disabled its
+   legacy JWT keys on 2026-10-21, and a build carrying one fails every sign-in);
 2. packages and signs every Electron executable with the Developer ID certificate under
    Hardened Runtime, with the `com.apple.security.device.audio-input` entitlement (it covers the
    microphone, the BlackHole input and native call audio) and the two usage descriptions macOS
@@ -214,7 +225,7 @@ Repository secrets required:
 
 | Secret | Contents |
 | --- | --- |
-| `FORGENOTES_SUPABASE_ANON_KEY` | The public Supabase anon JWT |
+| `FORGENOTES_SUPABASE_ANON_KEY` | The public Supabase publishable key (`sb_publishable_…`); the name predates it |
 | `MAC_CERT_P12_BASE64` | Developer ID certificate + private key, exported as `.p12`, base64-encoded |
 | `MAC_CERT_P12_PASSWORD` | Password used when exporting that `.p12` |
 | `APPLE_API_KEY_BASE64` | App Store Connect `.p8` key, base64-encoded |

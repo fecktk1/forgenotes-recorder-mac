@@ -1,5 +1,5 @@
 {
-  "_comment": "Copy to config.json for local development, or set FORGENOTES_SUPABASE_ANON_KEY when building. Only the PUBLIC anon JWT is accepted; never use a service-role key.",
+  "_comment": "Copy to config.json for local development, or set FORGENOTES_SUPABASE_ANON_KEY when building. Only the PUBLIC publishable key (sb_publishable_...) is accepted: the legacy JWT keys are disabled, and a secret key must never ship.",
   "supabaseUrl": "https://andrimdaxlxcqgqdqrbz.supabase.co",
   "supabaseAnonKey": "",
   "forgenotesHost": "https://notes.thecontentforge.io"
