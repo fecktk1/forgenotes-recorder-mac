@@ -47,6 +47,7 @@ npm ci
 npm run verify
 npm test
 npm run test:media-runtime
+npm run test:capture-runtime
 npm run test:recorder-ui
 npm run dist:mac
 ```

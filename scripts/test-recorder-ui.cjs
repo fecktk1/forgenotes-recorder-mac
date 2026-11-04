@@ -292,6 +292,41 @@ app.whenReady().then(async () => {
     assert.match(log(), /macOS handed call audio over late/)
     step('macOS window at Start: microphone recorded at once, call audio joins when it is answered')
 
+    // The Mac sleeps during a native recording and call audio does not survive it. main.js
+    // forwards powerMonitor as power:state. The sleep ends the segment and is left out of the
+    // recording's length; afterwards the microphone carries on and call audio is reopened in
+    // a new segment, instead of being dropped for the rest of the meeting.
+    await setMode('tone')
+    await start()
+    await until('both tracks to be heard', `rec.health.system === 'ok' && rec.health.mic === 'ok'`)
+    await sleep(1500)
+    const displayBeforeSleep = (await fake()).displayCalls
+    window.webContents.send('power:state', { state: 'suspend', at: Date.now() })
+    await until('the segment to end at the suspend', `!rec.live`)
+    await sleep(2500)
+    // Timers do not run while a Mac sleeps, so a tap that died with the sleep is only found
+    // after waking: the track ends and the wake arrives together.
+    await js(`__fake.tracks.at(-1).stop()`)
+    window.webContents.send('power:state', { state: 'resume', at: Date.now() })
+    await until('call audio to be recorded again after waking', `rec.live && rec.system && rec.mic && __fake.displayCalls > ${displayBeforeSleep} && rec.systemStream.getAudioTracks()[0].readyState === 'live' && rec.health.system === 'ok'`)
+    assert.match(await text('cap-system'), /capturing/)
+    await sleep(1200)
+    saved = await stop()
+    assert.deepEqual([...saved.tracks].sort(), ['mic', 'system'])
+    const byTrack = (track) => saved.segments.filter((s) => s.track === track).sort((a, b) => a.seq - b.seq)
+    const micSegments = byTrack('mic')
+    const systemSegments = byTrack('system')
+    assert.ok(micSegments.length >= 2 && systemSegments.length >= 2, 'the sleep ended a segment on both tracks and new ones started')
+    const micGap = micSegments[1].startOffsetMs - (micSegments[0].startOffsetMs + micSegments[0].durationMs)
+    assert.ok(Math.abs(micGap) < 500, `the microphone carries on where it stopped on the recording clock (gap ${micGap} ms)`)
+    assert.ok(systemSegments.at(-1).startOffsetMs >= micSegments[1].startOffsetMs - 50, 'the reopened call audio starts after the wake')
+    const wallMs = Date.parse(saved.endedAt) - Date.parse(saved.startedAt)
+    assert.ok(wallMs - saved.durationSec * 1000 >= 1200, `the sleep is left out of the length (wall ${wallMs} ms, audio ${saved.durationSec} s)`)
+    assert.match(log(), /Mac going to sleep/)
+    assert.match(log(), /Mac woke up/)
+    assert.match(log(), /capture: system reopened on attempt/)
+    step('sleep during a native recording: the sleep is left out, call audio is reopened afterwards')
+
     // First Start on a Mac that was never asked, and the window is ignored. The wait is
     // bounded (shortened here), the recording is microphone only, and it says why.
     await js(`localStorage.removeItem('fn_native_audio_asked'); NATIVE_WAIT.answerMs = 1500`)

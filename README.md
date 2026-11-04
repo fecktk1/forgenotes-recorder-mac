@@ -147,10 +147,11 @@ packaged app.
 ### Tests
 
 ```sh
-npm run verify              # syntax and capture contracts
-npm test                    # recording store; call-audio path choice, silence and echo maths, wording
-npm run test:media-runtime  # in Electron: recording, and the call-audio measurements on recorded audio
-npm run test:recorder-ui    # in Electron: the real window on both paths, with stand-in capture streams
+npm run verify                # syntax and capture contracts
+npm test                      # recording store, capture clock, stop on silence, input guard; call-audio path choice, silence and echo maths, wording
+npm run test:media-runtime    # in Electron: recording, and the call-audio measurements on recorded audio
+npm run test:capture-runtime  # in Electron: a sleep left out of the recording's length, stop on silence
+npm run test:recorder-ui      # in Electron: the real window on both paths, with stand-in capture streams
 ```
 
 None of these opens a real capture, so none of them can make macOS show a permission window.
@@ -167,6 +168,13 @@ installed ForgeNotes Recorder. Run it from Finder or with `open`, not with `npm 
 attributes an unpackaged run to the terminal that started it, and the permission window then
 names the terminal or does not appear at all. An ad-hoc build is a new app to macOS each time it
 is rebuilt, so it asks again after every build.
+
+To check that a built app declares both permission sentences and carries the audio entitlement on
+the app and every helper (the release build runs this as part of `npm run verify:mac`):
+
+```sh
+bash scripts/verify-call-audio-bundle.sh "release/mac-arm64/ForgeNotes Recorder Dev.app"
+```
 
 Authentication is retained through Electron `safeStorage`. Use **Record locally** without signing in. **Stop & save** keeps audio on this device; the local library offers playback, folder access and optional **Upload & transcribe**. Auto-upload is opt-in. Successful uploads retain local copies until you discard them. Completed one-minute segments are checkpointed during capture; a crash can lose the current segment and an in-flight disk write.
 
