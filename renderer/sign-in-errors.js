@@ -26,6 +26,8 @@
   const EMAIL_NOT_CONFIRMED = 'Confirm your email address to finish signing in.'
   const RATE_LIMITED = 'Too many attempts. Wait a few minutes, then try again.'
   const BANNED = "This account can't sign in right now. Contact support for help."
+  // The auth hook's 403 for a password sign-in by a member of a team that requires SSO.
+  const SSO_REQUIRED = 'Your organization requires single sign-on. Use Sign in with SSO and your work email.'
 
   // The gateway refusing the app's key: a 401 or 403 with the gateway's `message`, none of
   // GoTrue's fields, and wording about the API key. Retyping the password can never fix it.
@@ -44,6 +46,7 @@
     if (status >= 500) return UNAVAILABLE
 
     const text = String(body.msg || body.error_description || body.message || '')
+    if (/requires single sign-on/i.test(text)) return SSO_REQUIRED
     switch (body.error_code) {
       case 'invalid_credentials':
         return INVALID_CREDENTIALS
@@ -65,6 +68,7 @@
   return {
     APP_KEY_REFUSED,
     OFFLINE,
+    SSO_REQUIRED,
     isAppKeyRefused,
     signInFailureMessage,
   }

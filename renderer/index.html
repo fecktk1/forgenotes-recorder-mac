@@ -47,6 +47,14 @@
         </label>
         <p id="login-error" class="msg error hidden"></p>
         <button id="login-btn" class="btn primary">Sign in</button>
+        <div id="sso-block" class="sso-block hidden">
+          <p class="muted sso-or">Your company uses single sign-on? Enter your work email above.</p>
+          <button id="sso-btn" class="btn ghost">Sign in with SSO</button>
+        </div>
+        <div id="sso-wait" class="sso-wait hidden">
+          <p class="msg busy" aria-live="polite">Finish signing in in your web browser. This window signs you in when you are done.</p>
+          <button id="sso-cancel" class="btn ghost">Cancel</button>
+        </div>
       </section>
 
       <!-- Recorder -->

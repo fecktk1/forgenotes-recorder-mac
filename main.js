@@ -15,18 +15,40 @@
 // the tests). Main stays the trusted shell: window, encrypted token storage, the
 // local-recording (offline) queue, and the gate on system audio. It also tells the
 // renderer when the Mac goes to sleep and wakes (the recording's clock leaves the sleep
-// out), and raises the "Still there?" question outside the window.
+// out), and raises the "Still there?" question outside the window. "Sign in with SSO" runs here
+// too (sso.js): the PKCE flow, the identity provider in the system browser, and the
+// forgenotes-recorder://sso-callback link back through macOS's open-url event.
 const { app, BrowserWindow, ipcMain, shell, safeStorage, session, powerMonitor, Notification } = require('electron')
 const { autoUpdater } = require('electron-updater')
 const path = require('node:path')
 const fs = require('node:fs/promises')
 const systemAudio = require('./renderer/system-audio.js')
+const sso = require('./sso')
 
 const USER_DATA = () => app.getPath('userData')
 const AUTH_FILE = () => path.join(USER_DATA(), 'auth.bin')
 const REC_DIR = () => path.join(USER_DATA(), 'recordings')
 
 let mainWindow = null
+
+// ---------- the sign-in link ----------
+// macOS sends the running app (or the app it launches for the link) an open-url event for
+// forgenotes-recorder:// links; CFBundleURLTypes comes from "protocols" in package.json. It can
+// fire before 'ready' (a cold start from the link), so links wait in the inbox until the flow and
+// the window exist.
+let ssoFlow = null
+const ssoInbox = sso.createUrlInbox((url) => (ssoFlow ? ssoFlow.handleUrl(url) : false))
+app.on('open-url', (event, url) => {
+  event.preventDefault()
+  ssoInbox.deliver(url)
+})
+
+function showMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  if (mainWindow.isMinimized()) mainWindow.restore()
+  mainWindow.show()
+  mainWindow.focus()
+}
 
 // ---------- system audio (call audio) ----------
 // Development only: FORGENOTES_FAKE_MACOS_VERSION=13.6 npm start shows what an older Mac
@@ -119,6 +141,12 @@ function createWindow() {
   })
 
   mainWindow.setMenuBarVisibility(false)
+  mainWindow.webContents.on('did-finish-load', () => {
+    if (!ssoUndelivered) return
+    const result = ssoUndelivered
+    ssoUndelivered = null
+    mainWindow.webContents.send('sso:result', result)
+  })
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'))
 }
 
@@ -220,6 +248,55 @@ ipcMain.handle('open:external', async (_e, url) => {
   if (typeof url === 'string' && /^https?:\/\//i.test(url)) await shell.openExternal(url)
   return true
 })
+
+// ---------- IPC: Sign in with SSO ----------
+// The verifier and the waiting sign-in stay here (sso.js); the page gets only the outcome, on
+// 'sso:result': { ok: true, session } (which it stores like a password sign-in) or
+// { ok: false, message }. A result that comes while the page is loading waits for it. These
+// channels answer only the recorder window's own page.
+let ssoUndelivered = null
+
+function sendSsoResult(result) {
+  // The window may have been closed (the app stays in the Dock): bring one back for the answer.
+  if ((!mainWindow || mainWindow.isDestroyed()) && app.isReady()) createWindow()
+  showMainWindow()
+  if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isLoading()) {
+    mainWindow.webContents.send('sso:result', result)
+  } else {
+    ssoUndelivered = result
+  }
+}
+
+ssoFlow = sso.createSsoFlow({
+  fetch: (...args) => fetch(...args),
+  openExternal: (url) => shell.openExternal(url),
+  getConfig: loadConfig,
+  onResult: sendSsoResult,
+  log: (line) => void appendLog(line),
+})
+
+function ssoHandle(channel, listener) {
+  ipcMain.handle(channel, (event, ...args) => {
+    let trusted = false
+    try {
+      trusted = isRecorderFrame(event.senderFrame)
+    } catch {
+      trusted = false
+    }
+    if (!trusted) throw new Error('ipc_sender_rejected')
+    return listener(event, ...args)
+  })
+}
+
+ssoHandle('sso:available', async () => {
+  try {
+    return await ssoFlow.available()
+  } catch {
+    return false
+  }
+})
+ssoHandle('sso:start', async (_e, email) => ssoFlow.start(typeof email === 'string' ? email.slice(0, 320) : ''))
+ssoHandle('sso:cancel', async () => ssoFlow.cancel())
 
 // Free disk space on the recordings volume (preflight). statfs is Node 18.15+/Electron;
 // returns null if unavailable so the renderer degrades gracefully (recording still works).
@@ -464,6 +541,7 @@ ipcMain.handle('silence:clear', async () => {
 app.whenReady().then(() => {
   installSystemAudioHandler()
   createWindow()
+  ssoInbox.ready()
   initAutoUpdate()
   powerMonitor.on('suspend', () => sendPower('suspend'))
   powerMonitor.on('resume', () => sendPower('resume'))

@@ -23,6 +23,7 @@ jobs:
       - run: npm test
       - run: npm run test:media-runtime
       - run: npm run test:capture-runtime
+      - run: npm run test:sso-runtime
       - run: npm run test:recorder-ui
       # Last, so that an advisory in a build-time dependency still fails the job but no
       # longer hides whether the recorder itself works.
