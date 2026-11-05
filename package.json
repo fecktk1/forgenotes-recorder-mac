@@ -6,15 +6,16 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "verify": "node --check renderer/product-analytics.js && node --check renderer/capture-clock.js && node --check renderer/silence.js && node --check renderer/input-devices.js && node --check renderer/sign-in-errors.js && node --check renderer/system-audio.js && node --check renderer/level-worklet.js && node --check renderer/app.js && node --check main.js && node --check device-id.js && node scripts/verify-capture-profile.mjs",
+    "verify": "node --check renderer/product-analytics.js && node --check renderer/capture-clock.js && node --check renderer/silence.js && node --check renderer/input-devices.js && node --check renderer/sign-in-errors.js && node --check renderer/system-audio.js && node --check renderer/level-worklet.js && node --check renderer/app.js && node --check main.js && node --check device-id.js && node --check sso.js && node scripts/verify-capture-profile.mjs",
     "prepare:config": "node scripts/write-production-config.mjs",
     "dist:mac": "npm run prepare:config && electron-builder --mac --universal --publish never && npm run verify:mac",
     "dist:mac:unsigned": "npm run prepare:config && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --universal --publish never -c.mac.identity=null -c.mac.hardenedRuntime=false -c.mac.notarize=false",
     "verify:mac": "bash scripts/verify-macos-build.sh release/ForgeNotes-Recorder.dmg",
     "pack:mac:dev": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dir --publish never -c.appId=io.thecontentforge.forgenotes.recorder.mac.dev -c.productName=\"ForgeNotes Recorder Dev\" -c.extraMetadata.productName=\"ForgeNotes Recorder Dev\" -c.mac.identity=- -c.mac.hardenedRuntime=false -c.mac.notarize=false",
-    "test": "node --test scripts/test-recording-store.cjs scripts/test-capture-clock.cjs scripts/test-silence.cjs scripts/test-input-devices.cjs scripts/test-device-id.cjs scripts/test-supabase-key.mjs scripts/test-sign-in-errors.cjs scripts/test-product-analytics.cjs scripts/test-system-audio.cjs",
+    "test": "node --test scripts/test-recording-store.cjs scripts/test-capture-clock.cjs scripts/test-silence.cjs scripts/test-input-devices.cjs scripts/test-device-id.cjs scripts/test-supabase-key.mjs scripts/test-sign-in-errors.cjs scripts/test-sso.cjs scripts/test-product-analytics.cjs scripts/test-system-audio.cjs",
     "test:media-runtime": "electron scripts/test-media-runtime.cjs && electron scripts/test-call-audio-runtime.cjs",
     "test:capture-runtime": "electron scripts/test-capture-runtime.cjs",
+    "test:sso-runtime": "electron scripts/test-sso-runtime.cjs",
     "test:recorder-ui": "electron scripts/test-recorder-ui.cjs && electron scripts/test-recorder-ui.cjs --old-macos",
     "analyze:recording": "electron scripts/analyze-recording.cjs"
   },
@@ -44,12 +45,22 @@
       "!node_modules/sharp/**",
       "!node_modules/onnxruntime-node/**",
       "recording-store.js",
-      "device-id.js"
+      "device-id.js",
+      "sso.js"
     ],
     "directories": {
       "output": "release"
     },
     "artifactName": "ForgeNotes-Recorder.${ext}",
+    "protocols": [
+      {
+        "name": "ForgeNotes Recorder sign-in",
+        "role": "Viewer",
+        "schemes": [
+          "forgenotes-recorder"
+        ]
+      }
+    ],
     "publish": [
       {
         "provider": "github",

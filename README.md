@@ -130,6 +130,19 @@ npm run analyze:recording -- <folder>     # a recording folder ("Open folder" in
 It prints, per track, whether it is silent, and for the microphone track the delay and level of
 the call audio found in it. With headphones it reports none. It only reads the files.
 
+## Sign in with SSO
+
+When single sign-on is on for ForgeNotes, the sign-in card offers **Sign in with SSO**: enter your
+work email and the app opens your company's sign-in page in your default browser (not inside the
+app: identity providers, password managers and passkeys need the real browser). When you finish,
+the browser hands back to the app on `forgenotes-recorder://sso-callback` (macOS delivers it as an
+`open-url` event; the scheme is declared in the app's Info.plist through `protocols` in
+`package.json`, and `npm run verify:mac` checks it) and the app signs in, storing the sign-in like a
+password sign-in. The app waits five minutes, and **Cancel** stops waiting. The PKCE verifier stays
+in the main process (`sso.js`), and a link is used once, only while a sign-in this app started is
+waiting. A development run (`npm start`) has no Info.plist of its own, so the link only reaches a
+packaged build; `npm run test:sso-runtime` covers the flow with a fake auth server.
+
 ## Development
 
 ```sh

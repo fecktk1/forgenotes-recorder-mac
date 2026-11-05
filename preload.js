@@ -20,6 +20,18 @@ contextBridge.exposeInMainWorld('desktop', {
 
   openExternal: (url) => ipcRenderer.invoke('open:external', url),
 
+  // Sign in with SSO. ssoStart opens the identity provider in the browser and resolves
+  // { ok, message }; the outcome comes later on onSsoResult: { ok: true, session } or
+  // { ok: false, message }. The PKCE verifier never reaches the page.
+  ssoAvailable: () => ipcRenderer.invoke('sso:available'),
+  ssoStart: (email) => ipcRenderer.invoke('sso:start', email),
+  ssoCancel: () => ipcRenderer.invoke('sso:cancel'),
+  onSsoResult: (cb) => {
+    const handler = (_e, result) => cb(result)
+    ipcRenderer.on('sso:result', handler)
+    return () => ipcRenderer.removeListener('sso:result', handler)
+  },
+
   // This install's opaque id for ForgeNotes (device-id.js in main); null when it cannot be kept.
   deviceId: () => ipcRenderer.invoke('device:id'),
 

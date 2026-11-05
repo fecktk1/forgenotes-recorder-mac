@@ -92,12 +92,15 @@ async function boot() {
     await refreshPending()
     return
   }
+  void offerSso()
   const refresh = await window.desktop.secureGet()
   if (refresh) {
     try {
       await refreshSession(refresh)
       await enterRecorder()
-    } catch {
+    } catch (e) {
+      // A team that turned on Require SSO refuses a password session at its next refresh.
+      if (e && e.message === FnSignIn.SSO_REQUIRED) showLoginError(e.message)
       show('login-view')
     }
   } else {
@@ -152,6 +155,7 @@ async function refreshSession(refreshToken) {
   const data = await res.json().catch(() => ({}))
   // A refused key is this build's problem, not the session's: say so instead of "session_expired".
   if (FnSignIn.isAppKeyRefused(res.status, data)) throw new Error(FnSignIn.APP_KEY_REFUSED)
+  if (res.status === 403 && FnSignIn.signInFailureMessage(403, data) === FnSignIn.SSO_REQUIRED) throw new Error(FnSignIn.SSO_REQUIRED)
   if (!res.ok || !data.access_token) throw new Error('session_expired')
   setAuth(data)
 }
@@ -172,6 +176,59 @@ async function getToken() {
   if (!auth) throw new Error('Not signed in')
   if (Date.now() > auth.expires_at - 60000) await refreshSession(auth.refresh_token)
   return auth.access_token
+}
+
+// ---------------------------------------------------------------- Sign in with SSO
+// Main runs the flow (sso.js): it opens the identity provider in the browser and, when the
+// browser comes back on forgenotes-recorder://sso-callback, exchanges the code and sends the
+// session here. The button shows only when ForgeNotes says single sign-on is on.
+async function offerSso() {
+  let on = false
+  try { on = (await window.desktop.ssoAvailable()) === true } catch { on = false }
+  $('sso-block').classList.toggle('hidden', !on)
+}
+
+function showLoginError(text) {
+  $('login-error').textContent = text
+  show('login-error')
+}
+
+function setSsoWaiting(waiting) {
+  $('sso-wait').classList.toggle('hidden', !waiting)
+  $('sso-btn').disabled = waiting
+  $('login-btn').disabled = waiting
+  if (waiting) $('sso-wait').scrollIntoView({ block: 'nearest' })
+}
+
+async function startSso() {
+  hide('login-error')
+  setSsoWaiting(true)
+  let started
+  try {
+    started = await window.desktop.ssoStart($('login-email').value.trim())
+  } catch {
+    started = { ok: false, message: 'Single sign-on could not start. Try again.' }
+  }
+  if (started && started.ok) return // waiting for the browser; onSsoResult finishes it
+  setSsoWaiting(false)
+  if (started && started.message) showLoginError(started.message)
+}
+
+async function onSsoResult(result) {
+  setSsoWaiting(false)
+  if (!result || !result.ok) {
+    if (result && result.message && !auth) showLoginError(result.message)
+    return
+  }
+  if (auth) return // already signed in (a stray second result)
+  try {
+    setAuth(result.session)
+    hide('login-error')
+    await diag('sign-in: single sign-on')
+    await enterRecorder()
+  } catch (e) {
+    showLoginError((e && e.message) || 'Single sign-on did not finish. Try again.')
+  }
 }
 
 async function signOut() {
@@ -2281,6 +2338,12 @@ function wireEvents() {
   $('login-password').onkeydown = (e) => {
     if (e.key === 'Enter') $('login-btn').click()
   }
+  $('sso-btn').onclick = startSso
+  $('sso-cancel').onclick = async () => {
+    try { await window.desktop.ssoCancel() } catch { /* nothing was waiting */ }
+    setSsoWaiting(false)
+  }
+  window.desktop.onSsoResult(onSsoResult)
 
   $('auto-upload').checked = localStorage.getItem('fn_auto_upload') === 'true'
   $('auto-upload').onchange = (e) => localStorage.setItem('fn_auto_upload', String(e.target.checked))

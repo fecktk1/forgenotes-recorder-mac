@@ -86,6 +86,13 @@ if [[ "$bundle_id" != "$expected_bundle_id" ]]; then
   exit 1
 fi
 
+# Sign in with SSO returns on forgenotes-recorder://sso-callback, which macOS delivers only to an
+# app whose Info.plist declares the scheme (CFBundleURLTypes, from "protocols" in package.json).
+if ! plutil -extract CFBundleURLTypes xml1 -o - "$app_path/Contents/Info.plist" | grep -q '<string>forgenotes-recorder</string>'; then
+  echo "Info.plist does not declare the forgenotes-recorder: sign-in link (CFBundleURLTypes)." >&2
+  exit 1
+fi
+
 # Microphone and call audio: the app's own permission sentences and the audio-input
 # entitlement on the app and every helper (see the script for why each matters).
 bash "$(dirname "${BASH_SOURCE[0]}")/verify-call-audio-bundle.sh" "$app_path"

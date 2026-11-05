@@ -54,3 +54,11 @@ test('anything else shows the server words, or the status when it sent none', ()
   assert.equal(signIn.signInFailureMessage(422, { code: 422, error_code: 'validation_failed', msg: 'Unable to validate email address: invalid format' }), 'Unable to validate email address: invalid format')
   assert.equal(signIn.signInFailureMessage(404, {}), 'Sign-in failed (HTTP 404).')
 })
+
+test("the auth hook's single sign-on refusal points at Sign in with SSO", () => {
+  // forgenotes_auth_access_token_hook answers {http_code: 403, message}; GoTrue relays the message.
+  const hook = 'Your organization requires single sign-on. Use Sign in with SSO and your work email.'
+  assert.equal(signIn.signInFailureMessage(403, { code: 403, error_code: 'unexpected_failure', msg: hook }), signIn.SSO_REQUIRED)
+  assert.equal(signIn.signInFailureMessage(403, { message: hook }), signIn.SSO_REQUIRED)
+  assert.equal(signIn.isAppKeyRefused(403, { message: hook }), false)
+})

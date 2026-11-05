@@ -257,3 +257,7 @@ html, body {
 #local-player.hidden { display: none; }
 #local-player input[type="range"], #local-player p { width: 100%; }
 .pending-item .actions { flex-wrap: wrap; gap: 6px; }
+
+/* Sign in with SSO */
+.sso-block, .sso-wait { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+.sso-or { margin: 0; font-size: 12px; }
