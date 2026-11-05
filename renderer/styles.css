@@ -109,6 +109,10 @@ html, body {
 }
 .mode-option.active { border-color: var(--accent-strong); background: rgba(239, 192, 104, 0.12); color: var(--accent); }
 #system-audio-fields { display: flex; flex-direction: column; gap: 10px; }
+.native-audio, .blackhole-audio { display: flex; flex-direction: column; gap: 8px; }
+.native-audio-status { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--muted); }
+.native-audio-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.native-audio-actions:empty { display: none; }
 
 .checkbox { display: flex; align-items: center; gap: 9px; color: var(--muted); font-size: 13px; cursor: pointer; }
 .checkbox input { width: 16px; height: 16px; accent-color: var(--accent-strong); }

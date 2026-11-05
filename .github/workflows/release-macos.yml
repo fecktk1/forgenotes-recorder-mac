@@ -19,7 +19,29 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Publishing a draft made by a manual run creates its tag, and a pushed tag also starts this
+  # workflow. That second run rebuilt, signed and notarized the same commit only to fail at
+  # "a release with the same tag name already exists" (v0.13.0, run 41935240433). A pushed
+  # tag whose release already exists is skipped; a tag pushed to publish at once still builds.
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.check.outputs.build }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]] && gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $GITHUB_REF_NAME already exists (a published draft): nothing to build."
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+
   build:
+    needs: gate
+    if: needs.gate.outputs.build == 'true'
     runs-on: macos-14
     # Notarization is a round trip to Apple and is usually minutes, but the queue can be
     # slow enough to matter; the build itself is a few minutes of that.
@@ -60,6 +82,7 @@ jobs:
           npm audit --audit-level=low
           npm run test:media-runtime
           npm run test:capture-runtime
+          npm run test:recorder-ui
 
       # Both signing secrets are decoded to files rather than passed as base64 strings.
       # CSC_LINK does accept inline base64, but macOS `base64` wraps its output at 76

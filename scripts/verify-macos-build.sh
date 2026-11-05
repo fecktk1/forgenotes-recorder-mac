@@ -86,6 +86,10 @@ if [[ "$bundle_id" != "$expected_bundle_id" ]]; then
   exit 1
 fi
 
+# Microphone and call audio: the app's own permission sentences and the audio-input
+# entitlement on the app and every helper (see the script for why each matters).
+bash "$(dirname "${BASH_SOURCE[0]}")/verify-call-audio-bundle.sh" "$app_path"
+
 main_executable="$app_path/Contents/MacOS/ForgeNotes Recorder"
 main_archs="$(lipo -archs "$main_executable")"
 if [[ " $main_archs " != *" arm64 "* || " $main_archs " != *" x86_64 "* ]]; then
@@ -112,5 +116,6 @@ fi
 
 echo
 echo "Verified: notarized Developer ID signature (team ${expected_team_id}), Hardened Runtime,"
-echo "stapled ticket on the app, universal arm64/x86_64 ($mach_count Mach-O files)."
+echo "stapled ticket on the app, universal arm64/x86_64 ($mach_count Mach-O files),"
+echo "microphone and call-audio permissions declared."
 echo "Gatekeeper accepts this build with no quarantine workaround."
