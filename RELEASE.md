@@ -2,6 +2,8 @@
 
 This repository ships macOS only. Windows ships separately from `fecktk1/forgenotes-recorder`.
 
+Releases are published to the public releases-only repository **`fecktk1/forgenotes-recorder-mac-releases`** (`build.publish` in `package.json`). electron-builder writes that repository into every installed copy's `app-update.yml`, so installed copies check it for updates and this source repository can be private. Copies installed before the move still check this repository, so until it goes private the workflow also attaches each release here (`bridge_source_repo`, on by default and always on for a pushed tag). The workflow writes to the releases repository with the `RELEASES_REPO_TOKEN` secret (a fine-grained token with Contents read/write on that repository only).
+
 ## September 8, 2026 delivery
 
 [macOS v0.10.1](https://github.com/fecktk1/forgenotes-recorder-mac/releases/tag/v0.10.1) is published from `e0f732a7f6f73c43b27977a17bea651294f44ef1`. Native workflow run `34260279878` passed universal packaging, Developer ID signing, Apple notarization, Gatekeeper/stapling and updater-asset checks. The maintainer confirmed successful physical capture, sleep/wake, upload/retry, install/update and captions/model-loading checks. Exact device/OS details were not recorded.
@@ -14,7 +16,7 @@ Install `ForgeNotes-Recorder.dmg`, drag the app to Applications, eject the DMG a
 
 Make changes in this repository on a branch from current `main`. Bump `package.json` and `package-lock.json` together to a **new, unused version**, then review and merge. Do not move an existing distributed tag or rebuild over v0.10.1.
 
-The GitHub workflow uses these existing secret names: `FORGENOTES_SUPABASE_ANON_KEY`, `MAC_CERT_P12_BASE64`, `MAC_CERT_P12_PASSWORD`, `APPLE_API_KEY_BASE64`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER`, and `APPLE_TEAM_ID`. Keep secret values out of source and logs.
+The GitHub workflow uses these secret names: `RELEASES_REPO_TOKEN`, `FORGENOTES_SUPABASE_ANON_KEY`, `MAC_CERT_P12_BASE64`, `MAC_CERT_P12_PASSWORD`, `APPLE_API_KEY_BASE64`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER`, and `APPLE_TEAM_ID`. Keep secret values out of source and logs.
 
 Only after merging a new package version, run:
 
@@ -32,8 +34,10 @@ The Mac runner imports the Developer ID certificate into a temporary keychain, b
 The draft must contain `ForgeNotes-Recorder.dmg`, its checksum, `ForgeNotes-Recorder.zip`, `latest-mac.yml` and generated blockmaps. The ZIP and YAML are required for automatic updates; a DMG alone is insufficient. Complete [SECURITY_RELEASE_QA.md](SECURITY_RELEASE_QA.md) on the exact artifacts, including physical microphone capture, call-audio capture on both paths (native on macOS 14.2 or newer, including the first-run permission window; BlackHole on macOS 12.0 to 14.1 or with the setting) and captions. Then replace VERSION with the new package version:
 
 ```sh
+gh release edit vVERSION --repo fecktk1/forgenotes-recorder-mac-releases --draft=false --latest
+gh release view vVERSION --repo fecktk1/forgenotes-recorder-mac-releases
+# While installed copies may still check the source repository (bridge on):
 gh release edit vVERSION --repo fecktk1/forgenotes-recorder-mac --draft=false --latest
-gh release view vVERSION --repo fecktk1/forgenotes-recorder-mac
 ```
 
 ## Build locally on a Mac without publication
