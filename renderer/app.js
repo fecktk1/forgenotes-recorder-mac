@@ -1872,7 +1872,8 @@ async function stopRecording(reason = 'manual') {
     setCaptureNote(null)
   }
   void loadSilenceSetting() // the next Start uses the account's current choice
-  if (uploading) await retryPending(localId, $('stop-btn'))
+  // No button: the Stop button must not be left disabled for the next recording.
+  if (uploading) await retryPending(localId)
 
 }
 
@@ -2214,8 +2215,10 @@ async function retryPending(localId, btn) {
     setStatus('This recording is already uploading — hang tight.', 'warn')
     return
   }
-  btn.disabled = true
-  btn.textContent = 'Uploading…'
+  if (btn) {
+    btn.disabled = true
+    btn.textContent = 'Uploading…'
+  }
   try {
     const { meta, files } = await window.desktop.playback(localId)
     const seqd = files.map(({ url, ...segment }) => segment)
@@ -2223,8 +2226,10 @@ async function retryPending(localId, btn) {
     await uploadSegments(localId, meta, seqd)
   } catch (e) {
     setStatus(`Retry failed: ${e.message}`, 'error')
-    btn.disabled = false
-    btn.textContent = 'Retry'
+    if (btn) {
+      btn.disabled = false
+      btn.textContent = 'Retry'
+    }
   }
 }
 
