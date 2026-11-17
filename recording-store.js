@@ -3,7 +3,7 @@ const path = require('node:path')
 const { pathToFileURL } = require('node:url')
 
 // Why a recording ended, as the renderer reports it at Stop.
-const STOP_REASONS = new Set(['manual', 'silence', 'save_failed', 'device_lost'])
+const STOP_REASONS = new Set(['manual', 'silence', 'save_failed', 'device_lost', 'quit'])
 
 // The fields a finished recording may add to its meta.json, from the renderer: when it
 // ended (sent to the server as ended_at) and why. Anything else is dropped.

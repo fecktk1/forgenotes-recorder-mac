@@ -42,7 +42,7 @@ jobs:
   build:
     needs: gate
     if: needs.gate.outputs.build == 'true'
-    runs-on: macos-14
+    runs-on: macos-15
     # Notarization is a round trip to Apple and is usually minutes, but the queue can be
     # slow enough to matter; the build itself is a few minutes of that.
     timeout-minutes: 60
@@ -79,7 +79,7 @@ jobs:
 
       - name: Audit dependencies and verify Electron media runtime and capture timing
         run: |
-          npm audit --audit-level=low
+          npm run audit:gate
           npm run test:media-runtime
           npm run test:capture-runtime
           npm run test:recorder-ui
