@@ -16,7 +16,7 @@
 // local-recording (offline) queue, and the gate on system audio. It also tells the
 // renderer when the Mac goes to sleep and wakes (the recording's clock leaves the sleep
 // out), and raises the "Still there?" question outside the window.
-const { app, BrowserWindow, ipcMain, shell, safeStorage, session, powerMonitor, Notification } = require('electron')
+const { app, BrowserWindow, dialog, ipcMain, shell, safeStorage, session, powerMonitor, Notification } = require('electron')
 const { autoUpdater } = require('electron-updater')
 const path = require('node:path')
 const fs = require('node:fs/promises')
@@ -119,8 +119,69 @@ function createWindow() {
   })
 
   mainWindow.setMenuBarVisibility(false)
+  const window = mainWindow
+  window.webContents.on('will-prevent-unload', () => { void askToStopForQuit(window) })
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'))
 }
+
+// ---------- quitting during a recording ----------
+// The page refuses to unload while it records (its beforeunload), and Electron then cancels
+// the close or the Quit without a word. In 0.13.0 that left a recording whose Stop could not
+// be pressed with no way out but Force Quit. Now Quit asks: Keep Recording, or Stop and
+// Quit, which saves the recording on this Mac (no upload) and quits. If the page does not
+// report back in time the app quits anyway; the minute-long checkpoints already on disk are
+// listed at the next start, ready to upload.
+const STOP_FOR_QUIT_MS = 20000
+let quitQuestionOpen = false
+let quitFallback = null
+
+// Development only: the recorder UI test answers the question through this, since it cannot
+// press a button in a native dialog. Ignored in a packaged app.
+function testQuitAnswer() {
+  const answer = !app.isPackaged && process.env.FORGENOTES_TEST_QUIT_ANSWER
+  return answer === 'keep' ? 0 : answer === 'stop' ? 1 : null
+}
+
+async function askToStopForQuit(window) {
+  if (quitQuestionOpen || quitFallback || window.isDestroyed()) return
+  quitQuestionOpen = true
+  let response = 0
+  try {
+    response = testQuitAnswer() ?? (await dialog.showMessageBox(window, {
+      type: 'warning',
+      buttons: ['Keep Recording', 'Stop and Quit'],
+      defaultId: 0,
+      cancelId: 0,
+      message: 'A recording is in progress.',
+      detail: 'Stop and Quit saves the recording on this Mac. It is listed under Recordings on this device the next time you open ForgeNotes Recorder, ready to upload.',
+    })).response
+  } catch {
+    response = 0
+  } finally {
+    quitQuestionOpen = false
+  }
+  if (response !== 1 || window.isDestroyed()) return
+  void appendLog('quit: stopping the recording to quit')
+  quitFallback = setTimeout(() => {
+    void appendLog('quit: the recording did not stop in time; quitting anyway')
+    quitNow()
+  }, STOP_FOR_QUIT_MS)
+  window.webContents.send('app:stop-for-quit')
+}
+
+// Destroying the windows skips their beforeunload: by now the page has saved what it could.
+function quitNow() {
+  if (quitFallback) clearTimeout(quitFallback)
+  quitFallback = null
+  for (const window of BrowserWindow.getAllWindows()) window.destroy()
+  app.quit()
+}
+
+ipcMain.handle('app:quit', (event) => {
+  if (!isRecorderFrame(event.senderFrame)) return false
+  quitNow()
+  return true
+})
 
 // ---------- IPC: config ----------
 ipcMain.handle('config:get', async () => {

@@ -1411,6 +1411,10 @@ async function beginRecording() {
 
   $('start-btn').classList.add('hidden')
   $('pause-btn').classList.remove('hidden')
+  // Stop is reset on every Start, whatever an earlier recording or upload did to it: a
+  // Stop that cannot be pressed leaves a recording that cannot be ended or quit.
+  $('stop-btn').disabled = false
+  $('stop-btn').textContent = 'Stop & save'
   $('stop-btn').classList.remove('hidden')
   $('signout-btn').disabled = true
   $('system-audio-pref').disabled = true // the path of a running recording cannot change
@@ -1805,7 +1809,8 @@ function updateTimer() {
 }
 
 // reason: 'manual' (Stop), 'silence' (nobody answered "Still there?"), 'save_failed'
-// (the disk refused a segment) or 'device_lost' (the microphone did not survive a sleep).
+// (the disk refused a segment), 'device_lost' (the microphone did not survive a sleep) or
+// 'quit' (Stop and Quit, when the app is quit during a recording).
 async function stopRecording(reason = 'manual') {
   if (!rec || rec.stopping) return
   const current = rec
@@ -1833,9 +1838,9 @@ async function stopRecording(reason = 'manual') {
 
   // End the in-progress segment on each track (if a sleep has not already), wait for every
   // segment still closing, then collect everything. A recorder that never reports back
-  // cannot hold Stop forever.
-  await endSegments(current)
-  await Promise.race([Promise.all([...current.closing]), new Promise((resolve) => setTimeout(resolve, 15000))])
+  // cannot hold Stop forever: the in-progress segments are inside the same bound.
+  const ending = endSegments(current)
+  await Promise.race([Promise.all([ending, ...current.closing]), new Promise((resolve) => setTimeout(resolve, 15000))])
 
   current.streams.forEach((stream) => stream.getTracks().forEach((t) => t.stop()))
 
@@ -1849,7 +1854,8 @@ async function stopRecording(reason = 'manual') {
     return
   }
 
-  const uploading = $('auto-upload').checked && Boolean(auth)
+  // Quitting never starts an upload: the recording is listed for Upload & transcribe instead.
+  const uploading = reason !== 'quit' && $('auto-upload').checked && Boolean(auth)
   if (reason === 'silence') showStopNote(FnSilence.stoppedSentence(current.plan, { uploading, place: 'this Mac' }))
   else if (reason === 'device_lost') showStopNote('The recording stopped because the microphone was not available after the Mac woke up. Everything recorded before that is kept on this Mac.')
 
@@ -2316,6 +2322,15 @@ function wireEvents() {
   $('silence-retry').onclick = () => loadSilenceSetting()
   $('silence-keep').onclick = keepRecording
   window.desktop.onSilenceKeep(keepRecording)
+  // Quit (or closing the window) during a recording: main asked, and the person chose Stop
+  // and Quit. Save what was recorded, then quit. main quits by itself if this never returns.
+  window.desktop.onStopForQuit(async () => {
+    try {
+      if (rec) await stopRecording('quit')
+    } finally {
+      window.desktop.quitNow()
+    }
+  })
   // The Mac going to sleep and waking up (main.js forwards powerMonitor).
   window.desktop.onPower(onPower)
   $('preflight-btn').onclick = runPreflight
@@ -2336,7 +2351,8 @@ function wireEvents() {
   $('source').onchange = () => setCaptureProfile($('source').value === 'in_person' ? 'room_single_mic' : 'remote_dual_track', { syncSource: false })
   setCaptureProfile(localStorage.getItem('forgenotes_capture_profile') === 'room_single_mic' ? 'room_single_mic' : 'remote_dual_track', { check: false })
 
-  // Guard against losing an in-progress recording on accidental close.
+  // Guard against losing an in-progress recording on accidental close. main answers the
+  // blocked close with a Keep Recording / Stop and Quit question (will-prevent-unload).
   window.addEventListener('beforeunload', (e) => {
     if (rec) {
       e.preventDefault()

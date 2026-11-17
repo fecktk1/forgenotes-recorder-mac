@@ -438,6 +438,80 @@ app.whenReady().then(async () => {
     step('room setup: microphone only, no call-audio capture and no warning about it')
   }
 
+  // ---------------------------------------------------------------- either macOS
+  // An automatic upload after Stop must leave Stop usable for the next recording. In 0.13.0
+  // the upload kept the Stop button disabled and labelled "Uploading…", so the next
+  // recording in the same run could not be ended, and Quit was refused while it ran. The
+  // upload is stood in for here: signed in on paper, nothing leaves the machine.
+  await setMode('tone')
+  await js(`(() => {
+    window.__real = { auth, analytics, uploadSegments, loadSilenceSetting }
+    window.__uploads = []
+    auth = { access_token: 'test', refresh_token: 'test', expires_at: Date.now() + 3600000, email: 'test@example.invalid' }
+    analytics = null
+    uploadSegments = async (localId) => { window.__uploads.push(localId) }
+    loadSilenceSetting = async () => {}
+    document.getElementById('auto-upload').checked = true
+    return true
+  })()`)
+  await start()
+  await sleep(1200)
+  const uploadedId = await js('`rec_${rec.startedAt}`')
+  await stop()
+  await until('the automatic upload', `window.__uploads.length === 1`)
+  assert.equal(await js('window.__uploads[0]'), uploadedId)
+  assert.equal(await js(`document.getElementById('stop-btn').disabled`), false, 'the automatic upload leaves Stop alone')
+  await start()
+  assert.equal(await visible('stop-btn'), true)
+  assert.equal(await js(`document.getElementById('stop-btn').disabled`), false, 'Stop can be pressed on the next recording')
+  assert.equal(await text('stop-btn'), 'Stop & save')
+  await sleep(1200)
+  await stop()
+  await until('the second automatic upload', `window.__uploads.length === 2`)
+  // Even a Stop left disabled by anything else is handed back working at Start.
+  await js(`(() => { const b = document.getElementById('stop-btn'); b.disabled = true; b.textContent = 'Uploading…'; return true })()`)
+  await start()
+  assert.equal(await js(`document.getElementById('stop-btn').disabled`), false)
+  assert.equal(await text('stop-btn'), 'Stop & save')
+  await sleep(1200)
+  await stop()
+  await until('the third automatic upload', `window.__uploads.length === 3`)
+  await js(`(() => {
+    ({ auth, analytics, uploadSegments, loadSilenceSetting } = window.__real)
+    document.getElementById('auto-upload').checked = false
+    return true
+  })()`)
+  step('automatic upload: Stop stays usable, and every Start hands over a working Stop')
+
+  // Quit during a recording asks instead of being refused without a word. Keep Recording
+  // leaves everything as it was; Stop and Quit saves the recording (no upload) and quits.
+  // The test answers through FORGENOTES_TEST_QUIT_ANSWER (unpackaged runs only), and keeps
+  // the process alive past the quit to read what was saved. Last: the window is gone after.
+  await start()
+  await sleep(1200)
+  const quitId = await js('`rec_${rec.startedAt}`')
+  process.env.FORGENOTES_TEST_QUIT_ANSWER = 'keep'
+  window.close()
+  await sleep(1000)
+  assert.equal(window.isDestroyed(), false, 'Keep Recording keeps the window')
+  assert.equal(await js('Boolean(rec && rec.live && !rec.stopping)'), true, 'Keep Recording keeps recording')
+  let quitRequested = false
+  app.once('before-quit', (event) => { quitRequested = true; event.preventDefault() })
+  process.env.FORGENOTES_TEST_QUIT_ANSWER = 'stop'
+  window.close()
+  const quitDeadline = Date.now() + 25000
+  while (!(quitRequested && window.isDestroyed()) && Date.now() < quitDeadline) await sleep(100)
+  delete process.env.FORGENOTES_TEST_QUIT_ANSWER
+  assert.equal(quitRequested, true, 'Stop and Quit quits')
+  assert.equal(window.isDestroyed(), true)
+  const quitSaved = JSON.parse(fs.readFileSync(path.join(userData, 'recordings', quitId, 'meta.json'), 'utf8'))
+  assert.equal(quitSaved.state, 'saved', 'the recording was finished before quitting, not left as checkpoints')
+  assert.equal(quitSaved.stopReason, 'quit')
+  assert.ok(quitSaved.segments.length >= 1)
+  assert.match(log(), /quit: stopping the recording to quit/)
+  assert.doesNotMatch(log(), /did not stop in time/)
+  step('quit during a recording: Keep Recording carries on, Stop and Quit saves it and quits')
+
   console.log(JSON.stringify({ electron: process.versions.electron, macos: process.env.FORGENOTES_FAKE_MACOS_VERSION, steps: steps.length }))
   finish(0)
 }).catch((error) => {

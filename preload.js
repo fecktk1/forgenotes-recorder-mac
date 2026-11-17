@@ -55,6 +55,15 @@ contextBridge.exposeInMainWorld('desktop', {
     return () => ipcRenderer.removeListener('silence:keep', handler)
   },
 
+  // Quit during a recording: main asks, and on Stop and Quit tells the page to save the
+  // recording (onStopForQuit), which then calls quitNow.
+  onStopForQuit: (cb) => {
+    const handler = () => cb()
+    ipcRenderer.on('app:stop-for-quit', handler)
+    return () => ipcRenderer.removeListener('app:stop-for-quit', handler)
+  },
+  quitNow: () => ipcRenderer.invoke('app:quit'),
+
   // Local recording fallback / offline queue. Blobs cross IPC as ArrayBuffers.
   saveRecording: (localId, meta, segments) => ipcRenderer.invoke('rec:save', { localId, meta, segments }),
   checkpoint: (localId, meta, segment) => ipcRenderer.invoke('rec:checkpoint', { localId, meta, segment }),
