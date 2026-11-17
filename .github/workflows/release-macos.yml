@@ -7,6 +7,10 @@ on:
         description: Keep release out of automatic updates pending physical capture QA
         type: boolean
         default: true
+      bridge_source_repo:
+        description: Also attach this release to the source repository, for installed copies that still check it (keep on until the source repository goes private)
+        type: boolean
+        default: true
   push:
     tags:
       - 'v*'
@@ -28,11 +32,18 @@ jobs:
     outputs:
       build: ${{ steps.check.outputs.build }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: package.json
+          sparse-checkout-cone-mode: false
       - id: check
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASES_TOKEN: ${{ secrets.RELEASES_REPO_TOKEN }}
         run: |
-          if [[ "$GITHUB_REF_TYPE" == "tag" ]] && gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+          RELEASES_REPO="$(node -p "require('./package.json').build.publish[0].owner + '/' + require('./package.json').build.publish[0].repo")"
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]] && { gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+              || GH_TOKEN="$RELEASES_TOKEN" gh release view "$GITHUB_REF_NAME" --repo "$RELEASES_REPO" >/dev/null 2>&1; }; then
             echo "Release $GITHUB_REF_NAME already exists (a published draft): nothing to build."
             echo "build=false" >> "$GITHUB_OUTPUT"
           else
@@ -124,6 +135,12 @@ jobs:
           test -f release/latest-mac.yml || { echo "latest-mac.yml missing — auto-update would break" >&2; exit 1; }
           test -f release/ForgeNotes-Recorder.zip || { echo "zip missing — Squirrel.Mac cannot update from a DMG" >&2; exit 1; }
           cat release/latest-mac.yml
+          # The installed app checks the repository named in app-update.yml for updates.
+          RELEASES_REPO="$(node -p "require('./package.json').build.publish[0].owner + '/' + require('./package.json').build.publish[0].repo")"
+          feed="$(find release -path '*.app/Contents/Resources/app-update.yml' | head -1)"
+          test -n "$feed" || { echo "app-update.yml missing from the app bundle" >&2; exit 1; }
+          grep -qx "repo: ${RELEASES_REPO#*/}" "$feed" || { echo "app-update.yml does not point at $RELEASES_REPO" >&2; cat "$feed" >&2; exit 1; }
+          echo "Update feed: $RELEASES_REPO"
 
       - name: Create checksum
         working-directory: release
@@ -139,23 +156,33 @@ jobs:
             release/latest-mac.yml
           if-no-files-found: error
 
+      # Releases live in a public releases-only repository (package.json build.publish, which
+      # electron-builder also writes into the installed app's app-update.yml, so installed
+      # copies check that repository for updates). The source repository can then be private.
+      # Copies installed before the move still check THIS repository, so until it goes
+      # private each release is also attached here (bridge_source_repo; always on for a
+      # pushed tag). github.token cannot write to another repository: RELEASES_REPO_TOKEN is a
+      # fine-grained token with Contents read/write on the releases repository only.
+      # The zip and latest-mac.yml are what electron-updater reads; the DMG is only for
+      # humans doing a first install. Blockmaps make updates differential when present.
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
-        # The zip and latest-mac.yml are what electron-updater reads; the DMG is only for
-        # humans doing a first install. Blockmaps make updates differential when present.
-        # Tag push: publish exactly that tag (--verify-tag, unchanged behavior). Manual
-        # dispatch: publish v<package.json version> and let gh mint the tag at this
-        # commit via --target — so releases can be cut from environments that can push
-        # branches but not tags.
         run: |
           shopt -s nullglob
+          RELEASES_REPO="$(node -p "require('./package.json').build.publish[0].owner + '/' + require('./package.json').build.publish[0].repo")"
+          if [[ -z "$RELEASES_TOKEN" ]]; then
+            echo "::error::RELEASES_REPO_TOKEN is not set: it needs Contents read/write on $RELEASES_REPO"
+            exit 1
+          fi
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then
             TAG="$GITHUB_REF_NAME"
-            EXTRA=(--verify-tag)
+            SOURCE_EXTRA=(--verify-tag)
           else
             TAG="v$(node -p "require('./package.json').version")"
-            EXTRA=(--target "$GITHUB_SHA")
+            SOURCE_EXTRA=(--target "$GITHUB_SHA")
           fi
+          DRAFT=()
+          if [[ "$RELEASE_DRAFT" == "true" ]]; then DRAFT=(--draft); fi
           files=(
             release/ForgeNotes-Recorder.dmg
             release/ForgeNotes-Recorder.dmg.sha256
@@ -163,11 +190,30 @@ jobs:
             release/latest-mac.yml
           )
           files+=(release/*.blockmap)
-          if [[ "$RELEASE_DRAFT" == "true" ]]; then EXTRA+=(--draft); fi
-          gh release create "$TAG" "${files[@]}" \
-            "${EXTRA[@]}" \
-            --title "$TAG — macOS" \
-            --notes-file INTERNAL_INSTALL.md
+          if GH_TOKEN="$RELEASES_TOKEN" gh release view "$TAG" --repo "$RELEASES_REPO" >/dev/null 2>&1; then
+            echo "$RELEASES_REPO already has $TAG: not replaced."
+          else
+            # The tag is made on the releases repository's default branch; the source commit
+            # is named in the notes, since it does not exist there.
+            cp INTERNAL_INSTALL.md "$RUNNER_TEMP/notes.md"
+            printf '\nBuilt from %s@%s.\n' "$GITHUB_REPOSITORY" "$GITHUB_SHA" >> "$RUNNER_TEMP/notes.md"
+            GH_TOKEN="$RELEASES_TOKEN" gh release create "$TAG" "${files[@]}" \
+              --repo "$RELEASES_REPO" "${DRAFT[@]}" \
+              --title "$TAG — macOS" \
+              --notes-file "$RUNNER_TEMP/notes.md"
+          fi
+          if [[ "$BRIDGE_SOURCE" == "true" ]]; then
+            if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              echo "$GITHUB_REPOSITORY already has $TAG: not replaced."
+            else
+              gh release create "$TAG" "${files[@]}" \
+                --repo "$GITHUB_REPOSITORY" "${SOURCE_EXTRA[@]}" "${DRAFT[@]}" \
+                --title "$TAG — macOS" \
+                --notes-file INTERNAL_INSTALL.md
+            fi
+          fi
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASES_TOKEN: ${{ secrets.RELEASES_REPO_TOKEN }}
           RELEASE_DRAFT: ${{ github.event_name == 'workflow_dispatch' && inputs.draft }}
+          BRIDGE_SOURCE: ${{ github.event_name != 'workflow_dispatch' || inputs.bridge_source_repo }}

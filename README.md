@@ -219,7 +219,8 @@ for a local development build — it will not be trusted by Gatekeeper and must 
 
 ## Updates
 
-Installed copies check GitHub Releases in the background and download new versions
+Installed copies check GitHub Releases on `fecktk1/forgenotes-recorder-mac-releases` (see
+RELEASE.md) in the background and download new versions
 automatically. Updates are applied on quit and never mid-session: restarting during a
 recording would destroy an unrecoverable capture. The version badge shows "update ready"
 once a new build is staged.
