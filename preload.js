@@ -3,6 +3,20 @@
 const { contextBridge, ipcRenderer } = require('electron')
 
 contextBridge.exposeInMainWorld('desktop', {
+  // The app around this window (shell.js). The recorder reports its state for the menu bar
+  // or tray popover and the floating bar, and hears what they ask for.
+  publishShellState: (state) => ipcRenderer.send('shell:state', state),
+  onShellCommand: (cb) => {
+    const handler = (_e, command) => cb(command)
+    ipcRenderer.on('shell:command', handler)
+    return () => ipcRenderer.removeListener('shell:command', handler)
+  },
+  // Ask for an update check now: { quiet } keeps main from showing its own message.
+  checkForUpdates: (request) => ipcRenderer.invoke('update:check', request),
+  // A menu drawn by the system at the pointer: [{ id, label, enabled } | { type: 'separator' }].
+  // Resolves to the chosen id, or null.
+  popupMenu: (items) => ipcRenderer.invoke('menu:popup', items),
+
   getConfig: () => ipcRenderer.invoke('config:get'),
 
   // Call audio: whether this Mac can record it natively (macOS 14.2+), and a button target

@@ -483,22 +483,33 @@ app.whenReady().then(async () => {
   })()`)
   step('automatic upload: Stop stays usable, and every Start hands over a working Stop')
 
-  // Quit during a recording asks instead of being refused without a word. Keep Recording
-  // leaves everything as it was; Stop and Quit saves the recording (no upload) and quits.
-  // The test answers through FORGENOTES_TEST_QUIT_ANSWER (unpackaged runs only), and keeps
-  // the process alive past the quit to read what was saved. Last: the window is gone after.
+  // Closing the window during a recording hides it and asks nothing: the recording carries
+  // on, one click away in the menu bar. Quit asks instead of being refused without a word.
+  // Keep Recording leaves everything as it was; Stop and Quit saves the recording (no
+  // upload) and quits. The test answers through FORGENOTES_TEST_QUIT_ANSWER (unpackaged
+  // runs only), and keeps the process alive past the quit to read what was saved. Last:
+  // the window is gone after.
   await start()
   await sleep(1200)
   const quitId = await js('`rec_${rec.startedAt}`')
-  process.env.FORGENOTES_TEST_QUIT_ANSWER = 'keep'
+  delete process.env.FORGENOTES_TEST_QUIT_ANSWER
   window.close()
-  await sleep(1000)
+  await sleep(600)
+  assert.equal(window.isDestroyed(), false, 'closing the window hides it')
+  assert.equal(await js('Boolean(rec && rec.live && !rec.stopping)'), true, 'closing the window leaves the recording running')
+  assert.doesNotMatch(log(), /quit: stopping the recording to quit/)
+  process.env.FORGENOTES_TEST_QUIT_ANSWER = 'keep'
+  app.quit()
+  await sleep(1500)
   assert.equal(window.isDestroyed(), false, 'Keep Recording keeps the window')
   assert.equal(await js('Boolean(rec && rec.live && !rec.stopping)'), true, 'Keep Recording keeps recording')
+  // The first quit below is the person's; the second is the app quitting once the
+  // recording is saved, which the test holds back so that it can read the result.
   let quitRequested = false
-  app.once('before-quit', (event) => { quitRequested = true; event.preventDefault() })
+  let quits = 0
+  app.on('before-quit', (event) => { quits += 1; if (quits >= 2) { quitRequested = true; event.preventDefault() } })
   process.env.FORGENOTES_TEST_QUIT_ANSWER = 'stop'
-  window.close()
+  app.quit()
   const quitDeadline = Date.now() + 25000
   while (!(quitRequested && window.isDestroyed()) && Date.now() < quitDeadline) await sleep(100)
   delete process.env.FORGENOTES_TEST_QUIT_ANSWER

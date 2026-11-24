@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:;" />
+    <title>ForgeNotes recording</title>
+    <link rel="stylesheet" href="../tokens.css" />
+    <link rel="stylesheet" href="surface.css" />
+  </head>
+  <body>
+    <!-- Floats over the call while a recording runs and the main window is out of sight.
+         Drag it anywhere. It shows the recorder's state and asks for actions. -->
+    <div id="bar" class="bar">
+      <span class="rdot" aria-hidden="true"></span>
+      <span id="timer" class="tm">00:00</span>
+      <span id="glyph" class="glyph" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+      <span id="name" class="what one"></span>
+      <button id="captions" class="x hidden" type="button">Captions</button>
+      <button id="pause" class="x" type="button">Pause</button>
+      <button id="stop" class="sq" type="button" aria-label="Stop and save" title="Stop and save"><i></i></button>
+    </div>
+    <div id="drawer" class="drawer hidden"></div>
+    <script src="bar.js"></script>
+  </body>
+</html>

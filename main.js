@@ -16,11 +16,12 @@
 // local-recording (offline) queue, and the gate on system audio. It also tells the
 // renderer when the Mac goes to sleep and wakes (the recording's clock leaves the sleep
 // out), and raises the "Still there?" question outside the window.
-const { app, BrowserWindow, dialog, ipcMain, shell, safeStorage, session, powerMonitor, Notification } = require('electron')
+const { app, BrowserWindow, dialog, ipcMain, nativeTheme, shell: desktop, safeStorage, session, powerMonitor, Notification } = require('electron')
 const { autoUpdater } = require('electron-updater')
 const path = require('node:path')
 const fs = require('node:fs/promises')
 const systemAudio = require('./renderer/system-audio.js')
+const { createShell, windowChrome, glassQuery, HAS_GLASS } = require('./shell')
 
 const USER_DATA = () => app.getPath('userData')
 const AUTH_FILE = () => path.join(USER_DATA(), 'auth.bin')
@@ -94,12 +95,12 @@ async function loadConfig() {
   }
 }
 
-// The window opens at the size the person last left it and, the first time, at 480 x 700:
-// the Record view fits that without scrolling (scripts/test-layout.cjs). Sizes are the
-// page's own area (useContentSize), so the title bar and frame of each system do not eat
-// into it, and nothing in the page wraps down to the minimum.
-const WINDOW_DEFAULT = { width: 480, height: 700 }
-const WINDOW_MIN = { width: 440, height: 620 }
+// The window opens at the size the person last left it and, the first time, at 860 x 580:
+// the list of recordings beside the pane. Narrower than 620 the two take turns behind tabs,
+// down to 380 x 520. Sizes are the page's own area (useContentSize), and nothing in the
+// page wraps at any of them (scripts/test-layout.cjs).
+const WINDOW_DEFAULT = { width: 860, height: 580 }
+const WINDOW_MIN = { width: 380, height: 520 }
 const windowStateFile = () => path.join(app.getPath('userData'), 'window-state.json')
 
 function readWindowSize() {
@@ -142,8 +143,8 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     ...opening,
     useContentSize: true,
-    title: 'ForgeNotes Recorder',
-    backgroundColor: '#09090b',
+    title: 'ForgeNotes',
+    ...windowChrome(nativeTheme.shouldUseDarkColors),
     icon: path.join(__dirname, 'icon.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -162,9 +163,10 @@ function createWindow() {
 
   mainWindow.setMenuBarVisibility(false)
   rememberWindowSize(mainWindow, opening)
+  shell.attach(mainWindow)
   const window = mainWindow
   window.webContents.on('will-prevent-unload', () => { void askToStopForQuit(window) })
-  mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'))
+  mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'), glassQuery())
 }
 
 // ---------- quitting during a recording ----------
@@ -196,14 +198,17 @@ async function askToStopForQuit(window) {
       defaultId: 0,
       cancelId: 0,
       message: 'A recording is in progress.',
-      detail: 'Stop and Quit saves the recording on this Mac. It is listed under Recordings on this device the next time you open ForgeNotes Recorder, ready to upload.',
+      detail: 'Stop and Quit saves the recording on this Mac. It is listed under Recordings the next time you open ForgeNotes, ready to upload.',
     })).response
   } catch {
     response = 0
   } finally {
     quitQuestionOpen = false
   }
-  if (response !== 1 || window.isDestroyed()) return
+  if (response !== 1 || window.isDestroyed()) {
+    shell.quitCancelled() // closing the window hides it again
+    return
+  }
   void appendLog('quit: stopping the recording to quit')
   quitFallback = setTimeout(() => {
     void appendLog('quit: the recording did not stop in time; quitting anyway')
@@ -250,7 +255,7 @@ ipcMain.handle('system-audio:info', async () => ({
 // address: the renderer cannot make main open anything else through this call.
 ipcMain.handle('system-audio:open-settings', async () => {
   try {
-    await shell.openExternal('x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_AudioCapture')
+    await desktop.openExternal('x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_AudioCapture')
     return true
   } catch {
     return false
@@ -321,7 +326,7 @@ ipcMain.handle('device:id', async () => deviceIds().get())
 
 // ---------- IPC: external links ----------
 ipcMain.handle('open:external', async (_e, url) => {
-  if (typeof url === 'string' && /^https?:\/\//i.test(url)) await shell.openExternal(url)
+  if (typeof url === 'string' && /^https?:\/\//i.test(url)) await desktop.openExternal(url)
   return true
 })
 
@@ -425,7 +430,7 @@ ipcMain.handle('rec:playback', (_e, localId) => localStore().playback(localId))
 ipcMain.handle('rec:folder', async (_e, localId) => {
   const dir = localStore().directory(localId)
   if (!(await fs.stat(dir)).isDirectory()) throw new Error('recording_folder_missing')
-  const error = await shell.openPath(dir)
+  const error = await desktop.openPath(dir)
   if (error) throw new Error(error)
 })
 
@@ -564,16 +569,24 @@ ipcMain.handle('silence:clear', async () => {
   return true
 })
 
+// ---------- the app around the recorder window ----------
+// Menu bar icon and popover, the floating bar, the menus and Check for Updates (shell.js).
+const shell = createShell({
+  getMainWindow: () => mainWindow,
+  isRecorderFrame,
+  handle: (channel, listener) => ipcMain.handle(channel, listener),
+  getUpdater: () => autoUpdater,
+  log: appendLog,
+})
+
 // ---------- lifecycle ----------
 app.whenReady().then(() => {
+  if (!shell.start()) return
   installSystemAudioHandler()
   createWindow()
   initAutoUpdate()
   powerMonitor.on('suspend', () => sendPower('suspend'))
   powerMonitor.on('resume', () => sendPower('resume'))
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
-  })
 })
 
 app.on('window-all-closed', () => {

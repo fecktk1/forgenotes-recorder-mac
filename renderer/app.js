@@ -368,10 +368,10 @@ function setCaptureProfile(profile, { syncSource = true, check = true } = {}) {
   $('cap-mic').textContent = room ? 'Room mic' : 'You'
   // One line each at the narrowest window: scripts/test-layout.cjs measures them.
   $('mode-hint').textContent = room
-    ? 'One microphone for the room. Speakers are told apart in the transcript.'
+    ? 'One microphone records everyone in the room.'
     : systemAudioChoice().path === 'native'
-      ? 'Records your microphone and the call audio as separate tracks.'
-      : 'Records your microphone and, through BlackHole, the call audio.'
+      ? 'Records you and the call as separate tracks.'
+      : 'Records you and, through BlackHole, the call.'
   renderConsentCopy()
   if (syncSource) {
     if (room) $('source').value = 'in_person'
@@ -387,8 +387,8 @@ function renderConsentCopy() {
   const room = captureProfile() === 'room_single_mic'
   const el = $('consent-copy')
   el.textContent = announceEnabled()
-    ? 'Get consent first. ForgeNotes announces the recording when you start.'
-    : room ? 'Get consent from everyone in the room before you start.' : 'Get consent from everyone on the call before you start.'
+    ? 'Get consent first. ForgeNotes announces it when you start.'
+    : room ? 'Get consent from everyone in the room first.' : 'Get consent from everyone on the call first.'
   // The longer version, for anyone who rests the pointer on the line.
   el.title = announceEnabled()
     ? `ForgeNotes says “${ANNOUNCE_TEXT}” through your speakers when you start. People ${room ? 'in the room' : 'on a call'} only hear it if your speakers are on.`
@@ -2100,84 +2100,19 @@ async function uploadSegments(localId, meta, seqd) {
   }
 }
 
+// ---------------------------------------------------------------- saved recordings
+// The list in the sidebar, and the pane for the one that is chosen: its facts, a player
+// and what can be done with it. layout.js decides which pane is showing.
+let pendingItems = [] // the last list read from disk
+let selectedLocalId = null // the recording in the pane, if any
+let playingLocalId = null // the recording in the player, if any
 let stopLocalPlayback = () => {}
-let playingLocalId = null // the saved recording in the player, if any
 
 function clockText(seconds) {
   const whole = Math.max(0, Math.floor(seconds))
   return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}`
 }
 
-// The player sits inside the row it plays. The list is rebuilt whenever a recording
-// changes, so the one player element is parked in the list's section and put back.
-function placeLocalPlayer() {
-  const panel = $('local-player')
-  const row = playingLocalId && [...$('pending-list').children].find((li) => li.dataset.localId === playingLocalId)
-  if (row) row.insertBefore(panel, row.querySelector('.actions'))
-  else $('pending-view').appendChild(panel)
-  for (const li of $('pending-list').children) {
-    const play = li.querySelector('[data-play]')
-    if (play) play.textContent = li.dataset.localId === playingLocalId ? 'Close player' : 'Play'
-  }
-}
-
-async function playLocalRecording(localId) {
-  stopLocalPlayback()
-  const { files } = await window.desktop.playback(localId)
-  if (!files.length) throw new Error('No playable audio is saved.')
-  const panel = $('local-player'); panel.replaceChildren(); panel.classList.remove('hidden')
-  playingLocalId = localId
-  const toggle = document.createElement('button'); toggle.className = 'btn small'; toggle.type = 'button'; toggle.textContent = 'Pause'
-  const select = document.createElement('select'); select.setAttribute('aria-label', 'Who to hear')
-  const trackNames = [...new Set(files.map((f) => f.track))]
-  for (const name of ['everyone', ...trackNames]) {
-    const option = document.createElement('option'); option.value = name; option.textContent = name === 'everyone' ? 'Everyone' : trackLabel(name); select.appendChild(option)
-  }
-  const seek = document.createElement('input'); seek.type = 'range'; seek.min = '0'; seek.step = '0.1'
-  const total = Math.max(...files.map((f) => (f.startOffsetMs + f.durationMs) / 1000))
-  seek.max = String(total); seek.value = '0'
-  seek.setAttribute('aria-label', 'Local playback position')
-  const clock = document.createElement('span'); clock.className = 'time'
-  const showClock = (seconds) => { clock.textContent = `${clockText(seconds)} / ${clockText(total)}` }
-  showClock(0)
-  let players = []; let position = 0; let playing = true
-  function pause() { players.forEach((p) => p.pause()) }
-  function dispose() { players.forEach(p => { p.onended = null; p.ontimeupdate = null; p.onerror = null; p.onloadedmetadata = null; p.removeAttribute('src'); p.load() }) }
-  function playAt(seconds) {
-    pause(); dispose(); players = []; position = seconds
-    const selected = select.value === 'everyone' ? trackNames : [select.value]
-    const chosen = selected.map((track) => {
-      const trackFiles = files.filter((f) => f.track === track).sort((a, b) => a.seq - b.seq)
-      return [...trackFiles].reverse().find((f) => f.startOffsetMs / 1000 <= seconds && (f.startOffsetMs + f.durationMs) / 1000 > seconds)
-    }).filter(Boolean)
-    if (!chosen.length) { playing = false; toggle.textContent = 'Play'; return }
-    const masterFile = chosen.reduce((a, b) => a.durationMs >= b.durationMs ? a : b)
-    for (const file of chosen) {
-      const audio = new Audio(file.url); players.push(audio)
-      audio.onloadedmetadata = () => { audio.currentTime = Math.max(0, seconds - file.startOffsetMs / 1000); if (playing) audio.play().catch(() => { playing = false; toggle.textContent = 'Play' }) }
-      audio.onerror = () => { pause(); setStatus('A saved segment could not be played. Open its folder to inspect it.', 'error') }
-      if (file === masterFile) {
-        audio.ontimeupdate = () => { position = file.startOffsetMs / 1000 + audio.currentTime; seek.value = String(position); showClock(position) }
-        audio.onended = () => { const nextFile = files.filter(f => selected.includes(f.track) && f.startOffsetMs > file.startOffsetMs).sort((a,b) => a.startOffsetMs-b.startOffsetMs)[0]; if (nextFile) playAt(nextFile.startOffsetMs / 1000); else { playing = false; toggle.textContent = 'Play'; pause() } }
-      }
-    }
-  }
-  toggle.onclick = () => { playing = !playing; toggle.textContent = playing ? 'Pause' : 'Play'; if (playing) playAt(position >= Number(seek.max) ? 0 : position); else pause() }
-  seek.oninput = () => playAt(Number(seek.value))
-  select.onchange = () => playAt(position)
-  stopLocalPlayback = () => {
-    pause(); dispose(); panel.replaceChildren(); panel.classList.add('hidden')
-    playingLocalId = null
-    stopLocalPlayback = () => {}
-    placeLocalPlayer()
-  }
-  panel.append(toggle, seek, clock, select)
-  placeLocalPlayer()
-  playAt(0)
-}
-
-// ---------------------------------------------------------------- offline queue
-// What a row says about a recording: short facts, each on one line however narrow the window.
 function trackLabel(track) {
   return { mic: 'You', system: 'Call audio' }[track] || track
 }
@@ -2190,144 +2125,232 @@ function formatLength(seconds) {
   return minutes % 60 ? `${Math.floor(minutes / 60)} hr ${minutes % 60} min` : `${Math.floor(minutes / 60)} hr`
 }
 
-function formatDay(iso) {
+function formatDay(iso, { time = true } = {}) {
   if (!iso) return 'Unknown time'
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return 'Unknown time'
-  const time = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+  const clock = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
   const midnight = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime()
   const days = Math.round((midnight(new Date()) - midnight(d)) / 86400000)
-  if (days === 0) return `Today, ${time}`
-  if (days === 1) return `Yesterday, ${time}`
-  return `${d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}, ${time}`
+  const day = days === 0 ? 'Today' : days === 1 ? 'Yesterday' : d.toLocaleDateString(undefined, days < 7 ? { weekday: 'short' } : { month: 'short', day: 'numeric' })
+  return time ? `${day}, ${clock}` : day
 }
 
-function pendingStatus(state) {
-  if (state === 'uploaded') return { text: 'Uploaded', kind: 'ok' }
-  if (state === 'recording') return { text: 'Interrupted, recovered', kind: 'warn' }
-  if (state === 'damaged') return { text: 'Damaged', kind: 'bad' }
-  return { text: 'On this Mac', kind: '' }
+function isRecordingNow(item) {
+  return Boolean(rec && `rec_${rec.startedAt}` === item.localId)
 }
 
-let closePendingMenu = () => {}
-// Open folder and Delete live behind the row's "more" button.
-function openPendingMenu(li, anchor, item, busy) {
-  closePendingMenu()
-  const menu = document.createElement('div')
-  menu.className = 'menu'
-  menu.setAttribute('role', 'menu')
-  const add = (label, className, disabled, action) => {
-    const b = document.createElement('button')
-    b.type = 'button'; b.textContent = label; b.className = className; b.disabled = disabled
-    b.setAttribute('role', 'menuitem')
-    b.onclick = () => { closePendingMenu(); action() }
-    menu.appendChild(b)
+// What there is to say about a recording beyond its date and length, in words. Nothing
+// for one that is safely uploaded.
+function pendingStatus(item) {
+  if (isRecordingNow(item)) return 'Recording now'
+  if (activeUploads.has(item.localId)) return 'Uploading'
+  const state = item.meta.state
+  if (state === 'uploaded') return ''
+  if (state === 'recording') return 'Interrupted, recovered'
+  if (state === 'damaged') return 'Cannot be read'
+  return 'Not uploaded'
+}
+
+// Which heading a recording sits under in the list.
+function dayGroup(iso) {
+  const d = new Date(iso || '')
+  if (Number.isNaN(d.getTime())) return 'Earlier'
+  const midnight = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime()
+  const days = Math.round((midnight(new Date()) - midnight(d)) / 86400000)
+  if (days <= 0) return 'Today'
+  if (days === 1) return 'Yesterday'
+  if (days < 7) return 'This week'
+  return d.getFullYear() === new Date().getFullYear() ? d.toLocaleDateString(undefined, { month: 'long' }) : d.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })
+}
+
+function rowFacts(item) {
+  const d = new Date(item.meta.createdAt || '')
+  if (Number.isNaN(d.getTime())) return formatLength(item.meta.durationSec)
+  const group = dayGroup(item.meta.createdAt)
+  const when = group === 'Today' || group === 'Yesterday'
+    ? d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+    : group === 'This week' ? d.toLocaleDateString(undefined, { weekday: 'long' }) : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+  return `${when} · ${formatLength(item.meta.durationSec)}`
+}
+
+// Open folder and Delete, in the system's own menu.
+async function recordingMenu(item) {
+  const busy = activeUploads.has(item.localId) || isRecordingNow(item)
+  const choice = await window.desktop.popupMenu([
+    { id: 'folder', label: 'Open Folder' },
+    { type: 'separator' },
+    { id: 'delete', label: 'Delete…', enabled: !busy },
+  ])
+  if (choice === 'folder') window.desktop.openRecordingFolder(item.localId).catch((e) => setStatus(e.message, 'error'))
+  else if (choice === 'delete') void discardPending(item.localId)
+}
+
+const PLAY_ICON = '<svg viewBox="0 0 14 14" fill="currentColor" aria-hidden="true"><path d="M3 1.6v10.8a.6.6 0 0 0 .9.5l9-5.4a.6.6 0 0 0 0-1L3.900 1.100a.6.6 0 0 0-.9.5z"/></svg>'
+const PAUSE_ICON = '<svg viewBox="0 0 14 14" fill="currentColor" aria-hidden="true"><rect x="2.5" y="1.500" width="3.200" height="11" rx="1"/><rect x="8.300" y="1.500" width="3.200" height="11" rx="1"/></svg>'
+
+// The player as it stands before anything is loaded: a Play button and the length.
+function renderIdlePlayer(item) {
+  const panel = $('local-player')
+  panel.replaceChildren()
+  const play = document.createElement('button')
+  play.type = 'button'; play.className = 'play'; play.innerHTML = PLAY_ICON
+  play.setAttribute('aria-label', 'Play')
+  play.disabled = item.meta.state === 'damaged' || isRecordingNow(item)
+  play.onclick = () => playLocalRecording(item.localId).catch((e) => setStatus(e.message, 'error'))
+  const seek = document.createElement('input'); seek.type = 'range'; seek.min = '0'; seek.max = '1'; seek.value = '0'; seek.disabled = true
+  seek.setAttribute('aria-label', 'Playback position')
+  const clock = document.createElement('span'); clock.className = 'time'
+  clock.textContent = `0:00 / ${clockText(item.meta.durationSec || 0)}`
+  panel.append(play, seek, clock)
+}
+
+async function playLocalRecording(localId) {
+  stopLocalPlayback()
+  const { files } = await window.desktop.playback(localId)
+  if (!files.length) throw new Error('No playable audio is saved.')
+  if (selectedLocalId !== localId) return // another recording was chosen while this one loaded
+  const panel = $('local-player'); panel.replaceChildren()
+  playingLocalId = localId
+  const toggle = document.createElement('button'); toggle.className = 'play'; toggle.type = 'button'
+  const select = document.createElement('select'); select.setAttribute('aria-label', 'Who to hear')
+  const trackNames = [...new Set(files.map((f) => f.track))]
+  for (const name of ['everyone', ...trackNames]) {
+    const option = document.createElement('option'); option.value = name; option.textContent = name === 'everyone' ? 'Everyone' : trackLabel(name); select.appendChild(option)
   }
-  add('Open folder', '', false, () => window.desktop.openRecordingFolder(item.localId).catch((e) => setStatus(e.message, 'error')))
-  add('Delete', 'del', busy, () => discardPending(item.localId))
-  const actions = anchor.parentElement
-  menu.style.top = `${actions.offsetTop + actions.offsetHeight + 4}px`
-  li.appendChild(menu)
-  anchor.setAttribute('aria-expanded', 'true')
-  const outside = (e) => { if (!menu.contains(e.target) && !anchor.contains(e.target)) closePendingMenu() }
-  const key = (e) => { if (e.key === 'Escape') closePendingMenu() }
-  document.addEventListener('mousedown', outside)
-  document.addEventListener('keydown', key)
-  closePendingMenu = () => {
-    document.removeEventListener('mousedown', outside)
-    document.removeEventListener('keydown', key)
-    menu.remove()
-    anchor.setAttribute('aria-expanded', 'false')
-    closePendingMenu = () => {}
+  const seek = document.createElement('input'); seek.type = 'range'; seek.min = '0'; seek.step = '0.1'
+  const total = Math.max(...files.map((f) => (f.startOffsetMs + f.durationMs) / 1000))
+  seek.max = String(total); seek.value = '0'
+  seek.setAttribute('aria-label', 'Playback position')
+  const clock = document.createElement('span'); clock.className = 'time'
+  const showClock = (seconds) => { clock.textContent = `${clockText(seconds)} / ${clockText(total)}` }
+  showClock(0)
+  let players = []; let position = 0; let playing = true
+  const showPlaying = (on) => { playing = on; toggle.innerHTML = on ? PAUSE_ICON : PLAY_ICON; toggle.setAttribute('aria-label', on ? 'Pause' : 'Play') }
+  showPlaying(true)
+  function pause() { players.forEach((p) => p.pause()) }
+  function dispose() { players.forEach(p => { p.onended = null; p.ontimeupdate = null; p.onerror = null; p.onloadedmetadata = null; p.removeAttribute('src'); p.load() }) }
+  function playAt(seconds) {
+    pause(); dispose(); players = []; position = seconds
+    const selected = select.value === 'everyone' ? trackNames : [select.value]
+    const chosen = selected.map((track) => {
+      const trackFiles = files.filter((f) => f.track === track).sort((a, b) => a.seq - b.seq)
+      return [...trackFiles].reverse().find((f) => f.startOffsetMs / 1000 <= seconds && (f.startOffsetMs + f.durationMs) / 1000 > seconds)
+    }).filter(Boolean)
+    if (!chosen.length) { showPlaying(false); return }
+    const masterFile = chosen.reduce((a, b) => a.durationMs >= b.durationMs ? a : b)
+    for (const file of chosen) {
+      const audio = new Audio(file.url); players.push(audio)
+      audio.onloadedmetadata = () => { audio.currentTime = Math.max(0, seconds - file.startOffsetMs / 1000); if (playing) audio.play().catch(() => showPlaying(false)) }
+      audio.onerror = () => { pause(); setStatus('A saved segment could not be played. Open its folder to inspect it.', 'error') }
+      if (file === masterFile) {
+        audio.ontimeupdate = () => { position = file.startOffsetMs / 1000 + audio.currentTime; seek.value = String(position); showClock(position) }
+        audio.onended = () => { const nextFile = files.filter(f => selected.includes(f.track) && f.startOffsetMs > file.startOffsetMs).sort((a,b) => a.startOffsetMs-b.startOffsetMs)[0]; if (nextFile) playAt(nextFile.startOffsetMs / 1000); else { showPlaying(false); pause() } }
+      }
+    }
   }
+  toggle.onclick = () => { showPlaying(!playing); if (playing) playAt(position >= Number(seek.max) ? 0 : position); else pause() }
+  seek.oninput = () => playAt(Number(seek.value))
+  select.onchange = () => playAt(position)
+  stopLocalPlayback = () => {
+    pause(); dispose()
+    playingLocalId = null
+    stopLocalPlayback = () => {}
+    const item = pendingItems.find((x) => x.localId === selectedLocalId)
+    if (item) renderIdlePlayer(item)
+    else panel.replaceChildren()
+  }
+  panel.append(toggle, seek, clock, select)
+  playAt(0)
+}
+
+// Fills the pane for the chosen recording.
+function renderDetail() {
+  const item = pendingItems.find((x) => x.localId === selectedLocalId)
+  if (!item) return
+  const damaged = item.meta.state === 'damaged'
+  const uploaded = item.meta.state === 'uploaded'
+  const uploading = activeUploads.has(item.localId)
+  const recordingNow = isRecordingNow(item)
+  $('d-title').textContent = item.meta.title || 'Untitled meeting'
+  $('d-title').title = $('d-title').textContent
+  const setup = item.meta.capture_profile === 'room_single_mic' ? 'In person' : 'Online call'
+  $('d-facts').textContent = damaged
+    ? 'Open its folder to inspect the saved files'
+    : `${formatDay(item.meta.createdAt)} · ${formatLength(item.meta.durationSec)} · ${setup}`
+  const said = pendingStatus(item)
+  $('d-status').textContent = said && !damaged ? ` · ${said}` : ''
+  if (playingLocalId !== item.localId) renderIdlePlayer(item)
+
+  // While this recording's upload run is in flight, the button must not start a second
+  // parallel run (that's how duplicate meetings were created).
+  const upload = $('d-upload')
+  upload.classList.toggle('hidden', uploaded || damaged)
+  upload.textContent = uploading ? 'Uploading…' : 'Upload and transcribe'
+  upload.disabled = uploading || recordingNow
+  upload.onclick = () => retryPending(item.localId, upload)
+  const open = $('d-open')
+  const sessionId = uploaded && typeof item.meta.sessionId === 'string' ? item.meta.sessionId : ''
+  open.classList.toggle('hidden', !sessionId || !CFG || !CFG.forgenotesHost)
+  open.onclick = () => window.desktop.openExternal(`${CFG.forgenotesHost}/notes/m/${sessionId}?tab=notes`)
+  $('d-more').onclick = () => void recordingMenu(item)
+}
+
+function selectRecording(localId) {
+  if (selectedLocalId !== localId) stopLocalPlayback()
+  selectedLocalId = localId
+  for (const li of $('pending-list').querySelectorAll('li[data-local-id]')) li.firstElementChild.classList.toggle('sel', li.dataset.localId === localId)
+  renderDetail()
+  if (window.fnLayout) window.fnLayout.showDetail($('d-title').textContent)
 }
 
 async function refreshPending() {
   const list = $('pending-list')
   const items = await window.desktop.listPending()
-  closePendingMenu()
-  $('pending-view').appendChild($('local-player')) // parked while the rows are rebuilt
+  pendingItems = items
   $('pending-count').textContent = items.length ? String(items.length) : ''
   $('pending-empty').classList.toggle('hidden', items.length > 0)
   $('pending-note').classList.toggle('hidden', !items.length)
-  if (!items.length) {
-    hide('pending-view')
-    list.innerHTML = ''
-    return
-  }
-  show('pending-view')
+  $('pending-view').classList.toggle('hidden', !items.length)
   list.innerHTML = ''
+  let group = null
   for (const item of items) {
+    const heading = dayGroup(item.meta.createdAt)
+    if (heading !== group) {
+      group = heading
+      const head = document.createElement('li')
+      head.className = 'group-head'
+      head.textContent = heading
+      list.appendChild(head)
+    }
     const li = document.createElement('li')
-    li.className = 'pending-item'
     li.dataset.localId = item.localId
-    const recordingNow = Boolean(rec && `rec_${rec.startedAt}` === item.localId)
-    const uploading = activeUploads.has(item.localId)
-
-    const meta = document.createElement('div')
-    meta.className = 'meta'
-    const title = document.createElement('span')
-    title.className = 't clip'
+    const row = document.createElement('button')
+    row.type = 'button'
+    row.className = `row${item.localId === selectedLocalId ? ' sel' : ''}`
+    const txt = document.createElement('span'); txt.className = 'txt'
+    const title = document.createElement('span'); title.className = 't clip'
     title.textContent = item.meta.title || 'Untitled meeting'
-    title.title = title.textContent
-    const facts = document.createElement('div')
-    facts.className = 'facts'
-    const sub = document.createElement('span')
-    sub.className = 's clip'
-    const setup = item.meta.capture_profile === 'room_single_mic' ? 'In person' : 'Online call'
-    sub.textContent = item.meta.state === 'damaged'
-      ? 'Open its folder to inspect the saved files'
-      : `${formatDay(item.meta.createdAt)} · ${formatLength(item.meta.durationSec)} · ${setup}`
-    const status = document.createElement('span')
-    const st = recordingNow ? { text: 'Recording now', kind: 'warn' } : pendingStatus(item.meta.state)
-    status.className = `st ${st.kind}`
-    status.textContent = st.text
-    facts.append(sub, status)
-    meta.append(title, facts)
-
-    const actions = document.createElement('div')
-    actions.className = 'actions'
-    // While this recording's upload run is in flight, the button must not start a second
-    // parallel run (that's how duplicate meetings were created).
-    if (item.meta.state !== 'uploaded' && item.meta.state !== 'damaged') {
-      const retry = document.createElement('button')
-      retry.type = 'button'
-      retry.className = 'btn primary small'
-      retry.textContent = uploading ? 'Uploading…' : 'Upload and transcribe'
-      retry.disabled = uploading || recordingNow
-      retry.onclick = () => retryPending(item.localId, retry)
-      actions.appendChild(retry)
-    }
-    const play = document.createElement('button')
-    play.type = 'button'
-    play.className = 'btn small'; play.textContent = 'Play'; play.dataset.play = '1'
-    play.disabled = item.meta.state === 'damaged'
-    play.onclick = () => {
-      if (playingLocalId === item.localId) stopLocalPlayback()
-      else playLocalRecording(item.localId).catch((e) => setStatus(e.message, 'error'))
-    }
-    const spacer = document.createElement('span')
-    spacer.className = 'sp'
-    const more = document.createElement('button')
-    more.type = 'button'
-    more.className = 'icon-btn'
-    more.setAttribute('aria-label', 'More: open folder, delete')
-    more.setAttribute('aria-haspopup', 'menu')
-    more.setAttribute('aria-expanded', 'false')
-    more.title = 'More'
-    more.innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>'
-    more.onclick = () => {
-      if (more.getAttribute('aria-expanded') === 'true') closePendingMenu()
-      else openPendingMenu(li, more, item, uploading || recordingNow)
-    }
-    actions.append(play, spacer, more)
-
-    li.append(meta, actions)
+    const sub = document.createElement('span'); sub.className = 'm clip'
+    const said = pendingStatus(item)
+    sub.textContent = item.meta.state === 'damaged' ? said : said ? `${rowFacts(item)} · ${said}` : rowFacts(item)
+    txt.append(title, sub)
+    row.appendChild(txt)
+    row.onclick = () => selectRecording(item.localId)
+    row.oncontextmenu = (e) => { e.preventDefault(); void recordingMenu(item) }
+    li.appendChild(row)
     list.appendChild(li)
   }
-  // A recording that is no longer listed cannot stay in the player.
-  if (playingLocalId && !items.some((item) => item.localId === playingLocalId)) stopLocalPlayback()
-  else placeLocalPlayer()
+  // The chosen recording may have changed (uploaded, renamed) or gone (deleted).
+  if (selectedLocalId) {
+    if (items.some((item) => item.localId === selectedLocalId)) renderDetail()
+    else {
+      stopLocalPlayback()
+      selectedLocalId = null
+      if (window.fnLayout) window.fnLayout.closeDetail()
+    }
+  }
+  if (window.fnLayout) window.fnLayout.changed()
 }
 
 async function retryPending(localId, btn) {

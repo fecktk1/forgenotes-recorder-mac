@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:;" />
+    <title>ForgeNotes</title>
+    <link rel="stylesheet" href="../tokens.css" />
+    <link rel="stylesheet" href="surface.css" />
+  </head>
+  <body>
+    <!-- The menu bar (macOS) or tray (Windows) popover: start a recording, or watch and
+         stop the one that is running. It shows the recorder's state and asks for actions;
+         the recorder itself is the main window's page. -->
+    <div class="pop">
+      <!-- Ready -->
+      <div id="ready">
+        <input id="name" class="name" type="text" placeholder="Untitled meeting" aria-label="Meeting title" maxlength="200" />
+        <button id="go" class="go" type="button">
+          <span class="disc" aria-hidden="true"></span>
+          <span class="txt"><b id="go-label">Record</b><span id="go-sub" class="dim one"></span></span>
+        </button>
+        <div class="seg" role="group" aria-label="What are you recording?">
+          <button id="mode-online" type="button">Online call</button>
+          <button id="mode-room" type="button">In person</button>
+        </div>
+        <div id="recent-block">
+          <hr />
+          <div id="recent" class="recent"></div>
+        </div>
+        <hr />
+        <div class="links"><button id="all" type="button">All recordings</button><button id="settings" type="button">Settings</button></div>
+      </div>
+
+      <!-- Recording -->
+      <div id="live" class="hidden">
+        <div id="title" class="title one"></div>
+        <div class="clockrow"><div id="timer" class="timer">00:00</div><div class="dim"><span id="mode-text">Online call</span><br /><span id="state-text">Saved every minute</span></div></div>
+        <div class="lvl">You</div><div class="lv"><i id="lv-mic"></i></div>
+        <div id="sys-block"><div id="lv-sys-label" class="lvl">Call audio</div><div class="lv"><i id="lv-sys"></i></div></div>
+        <div id="question" class="note hidden"><span id="question-text"></span><br /><button id="keep" class="b gold" type="button">Keep recording</button></div>
+        <div class="btns"><button id="pause" class="b" type="button">Pause</button><button id="stop" class="b stop" type="button">Stop</button></div>
+      </div>
+    </div>
+    <script src="popover.js"></script>
+  </body>
+</html>
