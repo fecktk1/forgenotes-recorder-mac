@@ -2,6 +2,18 @@
 
 This repository ships macOS only. Windows ships separately from `fecktk1/forgenotes-recorder`.
 
+## Version 0.14.0
+
+The app around the recorder was rebuilt (#46); capture, checkpoints and upload are unchanged.
+
+- **One app, three surfaces.** A recordings window (the list by day on the sidebar's glass, one pane beside it), a menu bar icon with a popover to start and stop, and a bar that floats over the call while a recording runs.
+- **Follows macOS.** Light or dark from the system, the system font and controls, a real application menu with **Check for Updates…** and Settings… (⌘,), the system's context menu for a recording.
+- **Closing the window hides it**; the recording carries on and the app stays in the menu bar and the Dock. Quit still asks before ending a recording.
+- **Follows your devices.** A headset plugged in or a new system input shows up without pressing anything.
+- An uploaded recording opens on the web from its pane. Only one copy of the app runs at a time.
+
+Checked before release: every suite on a Mac (macOS 27.2, arm64), including `test:recorder-ui` for a current macOS (18 steps) and for macOS 13, plus the two new suites `test:layout` and `test:surfaces`. Not checked by a person before publication: the sidebar, popover and bar glass on screen, a click on the menu bar icon, physical microphone and call-audio capture on the signed build, and an update from an installed 0.13.1. Run [SECURITY_RELEASE_QA.md](SECURITY_RELEASE_QA.md) on the published build.
+
 ## September 8, 2026 delivery
 
 [macOS v0.10.1](https://github.com/fecktk1/forgenotes-recorder-mac/releases/tag/v0.10.1) is published from `e0f732a7f6f73c43b27977a17bea651294f44ef1`. Native workflow run `34260279878` passed universal packaging, Developer ID signing, Apple notarization, Gatekeeper/stapling and updater-asset checks. The maintainer confirmed successful physical capture, sleep/wake, upload/retry, install/update and captions/model-loading checks. Exact device/OS details were not recorded.

@@ -1,0 +1,78 @@
+/* ForgeNotes Recorder: colour, type and shape for every surface (the main window, the
+   menu bar / tray popover and the floating bar). Shared by the macOS and Windows apps: keep
+   the two copies identical.
+
+   The app looks like the system it runs on. Light or dark comes from the OS setting. The
+   font is the system's. Behind the sidebar, the popover and the bar is the system's own
+   glass (vibrancy on macOS, Mica and Acrylic on Windows 11): main asks the OS for it and
+   these pages simply leave those areas unpainted. The brand shows as the gold accent, the
+   official mark in the menu bar or tray, and nowhere else. Recording is the system red.
+   There are no status colours, dots or chips: state is said in words, where it matters. */
+:root {
+  color-scheme: light dark;
+  --window: #f3f3f3;          /* behind everything when the system gives no glass */
+  --content: #ffffff;         /* the pane people read and work in */
+  --raised: rgba(0, 0, 0, 0.04);
+  --hover: rgba(0, 0, 0, 0.055);
+  --press: rgba(0, 0, 0, 0.09);
+  --select: rgba(0, 0, 0, 0.08);
+  --line: rgba(0, 0, 0, 0.1);
+  --control: rgba(255, 255, 255, 0.85);
+  --control-line: rgba(0, 0, 0, 0.14);
+  --text: rgba(0, 0, 0, 0.88);
+  --muted: rgba(0, 0, 0, 0.55);
+  --faint: rgba(0, 0, 0, 0.38);
+  --accent: #efc068;
+  --accent-hover: #e8b453;
+  --accent-ink: #231a02;
+  --accent-text: #7d5200;     /* gold that reads as text on a light surface */
+  --focus: rgba(239, 192, 104, 0.55);
+  --rec: #ff3b30;
+  --danger: #d70015;
+  --radius: 10px;
+  --radius-sm: 6px;
+  --row: 30px;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --display: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --window: #202020;
+    --content: #1e1e1e;
+    --raised: rgba(255, 255, 255, 0.05);
+    --hover: rgba(255, 255, 255, 0.07);
+    --press: rgba(255, 255, 255, 0.11);
+    --select: rgba(255, 255, 255, 0.1);
+    --line: rgba(255, 255, 255, 0.1);
+    --control: rgba(255, 255, 255, 0.07);
+    --control-line: rgba(255, 255, 255, 0.12);
+    --text: rgba(255, 255, 255, 0.92);
+    --muted: rgba(255, 255, 255, 0.6);
+    --faint: rgba(255, 255, 255, 0.4);
+    --accent-text: #f2d48f;
+    --rec: #ff453a;
+    --danger: #ff6961;
+  }
+}
+
+/* Windows 11: its type size, corner radius and control height. */
+html.win { --radius: 8px; --radius-sm: 4px; --row: 36px; }
+/* On Windows the pane is a translucent layer over Mica, as in the system's own apps. */
+html.win.glass { --content: rgba(255, 255, 255, 0.55); }
+@media (prefers-color-scheme: dark) { html.win.glass { --content: rgba(58, 58, 58, 0.3); } }
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { color: var(--text); font: 13px/1.4 var(--font); -webkit-font-smoothing: antialiased; cursor: default; user-select: none; }
+html.win body { font-size: 14px; }
+h1, h2, h3, p { margin: 0; }
+input, textarea, .selectable { user-select: text; }
+button, input, select { font: inherit; color: inherit; }
+.hidden { display: none !important; }
+.clip { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.drag { -webkit-app-region: drag; }
+.drag button, .drag input, .drag select, .drag a, .no-drag { -webkit-app-region: no-drag; }
+:focus-visible { outline: 3px solid var(--focus); outline-offset: 1px; }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }

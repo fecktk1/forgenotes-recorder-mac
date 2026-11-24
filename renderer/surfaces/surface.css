@@ -1,0 +1,86 @@
+/* The popover and the floating bar. Shared by the macOS and Windows apps: keep the two
+   copies identical. Colour and type come from ../tokens.css.
+
+   Each is a small frameless window that the system rounds, shadows and fills with its own
+   glass (vibrancy on macOS, Acrylic on Windows 11); these pages leave it unpainted and
+   draw only text and controls. Where the system gives no glass they paint a plain
+   background instead. */
+html, body { height: auto; }
+body { background: var(--window); overflow: hidden; }
+html.glass body { background: transparent; }
+hr { border: 0; border-top: 1px solid var(--line); margin: 10px -14px; }
+.dim { color: var(--muted); }
+.one { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+button { cursor: default; }
+
+/* ── Popover ───────────────────────────────────────────────────────────────── */
+.pop { padding: 14px; }
+.name { width: 100%; padding: 0 0 10px; border: 0; background: none; font: 600 16px/1.25 var(--display); outline: none; }
+.name::placeholder { color: var(--faint); font-weight: 500; }
+.go { width: calc(100% + 12px); margin: 0 -6px; display: flex; align-items: center; gap: 12px; padding: 6px; border: 0; border-radius: var(--radius); background: none; text-align: left; transition: background 0.1s; }
+.go:hover { background: var(--hover); }
+.go:active { background: var(--press); }
+.go .disc { flex: none; position: relative; width: 42px; height: 42px; border-radius: 50%; box-shadow: inset 0 0 0 2px var(--control-line); transition: transform 0.14s var(--ease); }
+.go .disc::after { content: ""; position: absolute; inset: 5px; border-radius: 50%; background: var(--rec); }
+.go:hover .disc { transform: scale(1.06); }
+.go:active .disc { transform: scale(0.95); }
+.go .txt { min-width: 0; display: flex; flex-direction: column; }
+.go .txt b { font-size: 1.1em; font-weight: 600; }
+.seg { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; padding: 2px; margin-top: 10px; border-radius: 8px; background: var(--raised); box-shadow: inset 0 0 0 1px var(--line); }
+html.win .seg { border-radius: 6px; }
+.seg button { height: 24px; padding: 0; border: 0; border-radius: 6px; background: none; color: var(--muted); white-space: nowrap; transition: background 0.14s, color 0.14s; }
+html.win .seg button { height: 28px; border-radius: 4px; }
+.seg button:hover { color: var(--text); }
+.seg button.on { background: var(--control); color: var(--text); font-weight: 500; box-shadow: 0 0.5px 2px rgba(0, 0, 0, 0.22), 0 0 0 0.5px var(--line); }
+.recent { margin: 0 -6px; }
+.recent button { width: 100%; display: flex; align-items: baseline; gap: 10px; min-height: 28px; padding: 4px 6px; border: 0; border-radius: var(--radius-sm); background: none; text-align: left; transition: background 0.1s; }
+.recent button:hover { background: var(--hover); }
+.recent button:active { background: var(--press); }
+.recent .n { flex: 1; }
+.recent .m { flex: none; font-size: 0.88em; color: var(--muted); white-space: nowrap; }
+.links { margin: 0 -6px; display: flex; flex-direction: column; }
+.links button { min-height: 28px; padding: 4px 6px; border: 0; border-radius: var(--radius-sm); background: none; text-align: left; white-space: nowrap; transition: background 0.1s; }
+.links button:hover { background: var(--hover); }
+.links button:active { background: var(--press); }
+
+.title { font: 600 16px/1.25 var(--display); padding-bottom: 10px; }
+.clockrow { display: flex; align-items: flex-end; justify-content: space-between; gap: 10px; }
+.timer { font: 300 36px/1 var(--display); letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.clockrow .dim { text-align: right; font-size: 0.92em; line-height: 1.35; white-space: nowrap; }
+.lvl { margin-top: 10px; font-size: 0.88em; color: var(--muted); white-space: nowrap; }
+.lvl.bad { color: var(--text); font-weight: 600; }
+.lv { height: 3px; margin-top: 5px; border-radius: 2px; background: var(--line); overflow: hidden; }
+.lv i { display: block; height: 100%; width: 0%; border-radius: 2px; background: var(--muted); transition: width 0.12s linear; }
+.note { margin-top: 12px; line-height: 1.4; }
+.note button { margin-top: 8px; }
+.btns { display: grid; grid-template-columns: 1fr 1.6fr; gap: 8px; margin-top: 14px; }
+.b { height: 30px; padding: 0 12px; border: 1px solid var(--control-line); border-radius: var(--radius-sm); background: var(--control); font-weight: 500; white-space: nowrap; transition: transform 0.1s var(--ease), filter 0.1s, background 0.1s; }
+html.win .b { height: 32px; }
+.b:hover { background: var(--raised); }
+.b:active { transform: scale(0.97); }
+.b.stop { background: var(--rec); border-color: transparent; color: #fff; font-weight: 600; }
+.b.stop:hover { background: var(--rec); filter: brightness(1.1); }
+.b.gold { background: var(--accent); border-color: transparent; color: var(--accent-ink); }
+.b.gold:hover { background: var(--accent-hover); }
+
+/* ── Floating bar ──────────────────────────────────────────────────────────── */
+.bar { display: flex; align-items: center; gap: 10px; height: 44px; padding: 0 8px 0 14px; white-space: nowrap; -webkit-app-region: drag; }
+.bar button { -webkit-app-region: no-drag; }
+.rdot { flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--rec); animation: pulse 1.4s ease-in-out infinite; }
+.paused .rdot { animation: none; background: var(--faint); }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+.bar .tm { font-weight: 600; font-variant-numeric: tabular-nums; }
+.glyph { flex: none; display: flex; align-items: center; gap: 2px; height: 16px; }
+.glyph i { width: 2px; height: 3px; border-radius: 1px; background: var(--text); transition: height 0.12s linear; }
+.bar .what { flex: 1; color: var(--muted); }
+.bar .x { flex: none; height: 28px; padding: 0 8px; border: 0; border-radius: var(--radius-sm); background: none; color: var(--muted); transition: background 0.1s, color 0.1s; }
+.bar .x:hover { background: var(--hover); color: var(--text); }
+.bar .x:active { background: var(--press); }
+.bar .x.on { color: var(--text); font-weight: 500; }
+.bar .sq { flex: none; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 7px; background: var(--rec); display: grid; place-items: center; transition: transform 0.1s var(--ease), filter 0.1s; }
+.bar .sq:hover { filter: brightness(1.1); }
+.bar .sq:active { transform: scale(0.92); }
+.bar .sq i { width: 10px; height: 10px; border-radius: 2px; background: #fff; }
+.drawer { padding: 2px 14px 12px; line-height: 1.5; }
+.drawer .cap { display: block; margin-bottom: 2px; font-size: 0.88em; color: var(--muted); }
+.drawer .b { margin-top: 8px; }

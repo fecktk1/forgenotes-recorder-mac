@@ -63,7 +63,7 @@ at the top of the recorder says which it is and whether it is ready.
    you keep hearing the call through whatever speakers or headphones you already use.
 
 Nothing is recorded by this step. Call audio is only captured between **Start recording** and
-**Stop & save**.
+**Stop and save**.
 
 If you chose **Don't Allow**, or the line says macOS is not letting ForgeNotes record call audio:
 open **System Settings → Privacy & Security → Screen & System Audio Recording**, and under
@@ -176,7 +176,7 @@ the app and every helper (the release build runs this as part of `npm run verify
 bash scripts/verify-call-audio-bundle.sh "release/mac-arm64/ForgeNotes Recorder Dev.app"
 ```
 
-Authentication is retained through Electron `safeStorage`. Use **Record locally** without signing in. **Stop & save** keeps audio on this device; the local library offers playback, folder access and optional **Upload & transcribe**. Auto-upload is opt-in. Successful uploads retain local copies until you discard them. Completed one-minute segments are checkpointed during capture; a crash can lose the current segment and an in-flight disk write.
+Authentication is retained through Electron `safeStorage`. Use **Record locally** without signing in. **Stop and save** keeps audio on this device; the local library offers playback, folder access and optional **Upload & transcribe**. Auto-upload is opt-in. Successful uploads retain local copies until you discard them. Completed one-minute segments are checkpointed during capture; a crash can lose the current segment and an in-flight disk write.
 
 **Stop a recording by itself** is off unless you choose a time (Never, 5, 10 or 20 minutes). It is the same setting as on the web: it is kept with your account and this app uses the last value it saw (signed out, it is kept on this Mac). When every captured track (microphone and call audio) has been quiet for that long minus a minute, the app asks “Still there?” with a chime, a notification, a bouncing Dock icon and the window title, and stops a minute later if nobody chooses **Keep recording**. Nothing is trimmed: the quiet part is kept and uploaded like the rest.
 
