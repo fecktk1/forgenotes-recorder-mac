@@ -6,25 +6,41 @@
     <title>ForgeNotes Recorder</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
-  <body>
-    <header class="app-header">
-      <div class="brand">
-        <span class="brand-dot"></span>
-        <span>ForgeNotes <strong>Recorder</strong></span>
-        <span class="brand-ver" id="app-version"></span>
+  <body data-view="record">
+    <!-- Three views, one shown at a time (layout.js): Record, Recordings and Settings.
+         Every control keeps the id app.js knows it by, wherever it sits. -->
+    <header class="head">
+      <div class="head-side head-main">
+        <img class="lockup" src="brand/forgenotes.svg" alt="ForgeNotes" />
       </div>
-      <div id="rec-indicator" class="rec-indicator hidden">
-        <span class="rec-dot"></span>
-        <span id="rec-timer">00:00</span>
+      <div class="head-side head-main">
+        <span id="update-flag" class="update-flag hidden">Update ready</span>
+        <div id="rec-indicator" class="rec-indicator hidden">
+          <span class="rec-dot"></span>
+          <span id="rec-timer">00:00</span>
+        </div>
+        <button id="settings-open" class="icon-btn" type="button" aria-label="Settings" title="Settings">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.9 2.9l-.1-.1a1.7 1.7 0 0 0-2.8 1.2V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-2.8-1.5l-.1.1a2 2 0 1 1-2.9-2.9l.1-.1A1.7 1.7 0 0 0 3.100 14H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.500-2.800l-.1-.1a2 2 0 1 1 2.900-2.900l.1.1a1.7 1.7 0 0 0 1.800.3h.1a1.7 1.7 0 0 0 1-1.500V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 2.800 1.200l.1-.1a2 2 0 1 1 2.900 2.900l-.1.1a1.7 1.7 0 0 0-.3 1.800v.1a1.7 1.7 0 0 0 1.500 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.500 1z"/></svg>
+        </button>
+      </div>
+      <div class="head-side head-settings">
+        <button id="settings-close" class="icon-btn" type="button" aria-label="Back" title="Back">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>
+        </button>
+        <span class="head-title">Settings</span>
+      </div>
+      <div class="head-side head-settings">
+        <span class="brand-ver" id="app-version"></span>
       </div>
     </header>
 
-    <main class="app-body">
-      <section class="card">
-        <label><input id="analytics-choice" type="checkbox" /> Share optional product analytics</label>
-        <p class="muted">Helps improve recording and upload reliability. Includes action outcomes and app version, never audio, meeting text, or email. This preference applies to your signed-in account.</p>
-        <p id="analytics-status" class="muted" aria-live="polite"></p>
-      </section>
+    <nav class="tabs" aria-label="Sections">
+      <button id="tab-record" class="tab" type="button">Record</button>
+      <button id="tab-recordings" class="tab" type="button">Recordings<span id="pending-count" class="n"></span></button>
+    </nav>
+
+    <!-- ── Record ─────────────────────────────────────────────────────────── -->
+    <main id="view-record" class="view">
       <!-- Config missing -->
       <section id="config-error" class="card error-card hidden">
         <h2>Setup needed</h2>
@@ -33,10 +49,8 @@
       </section>
 
       <!-- Login -->
-      <section id="login-view" class="card hidden">
+      <section id="login-view" class="login hidden">
         <h2>Sign in</h2>
-        <button id="local-record-btn" class="btn ghost">Record locally without signing in</button>
-        <p class="muted">Use your ForgeNotes (TheContentForge) account.</p>
         <label class="field">
           <span>Email</span>
           <input id="login-email" type="email" autocomplete="username" placeholder="you@thecontentforge.io" />
@@ -46,57 +60,18 @@
           <input id="login-password" type="password" autocomplete="current-password" />
         </label>
         <p id="login-error" class="msg error hidden"></p>
-        <button id="login-btn" class="btn primary">Sign in</button>
+        <button id="login-btn" class="btn primary wide">Sign in</button>
+        <p class="or">or</p>
+        <button id="local-record-btn" class="btn ghost wide">Record without signing in</button>
       </section>
 
       <!-- Recorder -->
       <section id="recorder-view" class="hidden">
-        <div class="account-row">
-          <span class="muted" id="account-email"></span>
-          <button id="signout-btn" class="btn link">Sign out</button>
-        </div>
-
-        <div class="card">
+        <!-- Before recording: only what is needed to start. -->
+        <div class="setup">
           <label class="field">
             <span>Meeting title</span>
             <input id="title" type="text" placeholder="Untitled meeting" />
-          </label>
-
-          <label class="field">
-            <span>Template</span>
-            <!-- keys mirror supabase/functions/_shared/forgenotes-templates.ts (source of truth).
-                 The empty option means "no explicit pick": template_key is OMITTED from the
-                 create-session body and the server applies the user's saved default
-                 (forgenotes_user_settings.default_template_key, /notes/settings). -->
-            <select id="template">
-              <option value="" selected>Use my account default</option>
-              <option value="general">General</option>
-              <optgroup label="Internal">
-                <option value="one_on_one">1:1</option>
-                <option value="standup">Standup</option>
-                <option value="team_meeting">Team meeting</option>
-                <option value="retrospective">Retrospective</option>
-                <option value="planning">Planning</option>
-                <option value="brainstorm">Brainstorm</option>
-              </optgroup>
-              <optgroup label="External">
-                <option value="sales_call">Sales call</option>
-                <option value="investor_call">Investor call</option>
-                <option value="interview">Interview</option>
-                <option value="client_project">Client / project</option>
-                <option value="customer_support">Support call</option>
-              </optgroup>
-              <optgroup label="Formal">
-                <option value="board_meeting">Board meeting</option>
-                <option value="incident_review">Incident review</option>
-              </optgroup>
-              <optgroup label="Content &amp; community">
-                <option value="training">Training</option>
-                <option value="seminar">Seminar</option>
-                <option value="community_call">Community call</option>
-                <option value="content_recording">Content recording</option>
-              </optgroup>
-            </select>
           </label>
 
           <div id="first-run" class="first-run hidden">
@@ -104,47 +79,17 @@
             meeting or <em>In person</em> for the room mic. <span id="first-run-audio"></span>
             Recordings upload when you stop, become transcripts and notes in a few minutes, and
             live in the same library as your iPhone and web captures.</p>
-            <button id="first-run-dismiss" class="btn ghost small" type="button">Got it</button>
+            <button id="first-run-dismiss" class="btn primary small" type="button">Got it</button>
           </div>
 
           <div class="field">
-            <span>Recording setup</span>
-            <div class="mode-toggle" role="group" aria-label="Recording setup">
+            <span>What are you recording?</span>
+            <div class="mode-toggle" role="group" aria-label="What are you recording?">
               <button id="mode-online" class="mode-option active" type="button">Online call</button>
-              <button id="mode-room" class="mode-option" type="button">In person / room</button>
+              <button id="mode-room" class="mode-option" type="button">In person</button>
             </div>
-            <p id="mode-hint" class="hint">Captures your microphone and the call audio as separate tracks.</p>
+            <p id="mode-hint" class="hint">Records your microphone and the call audio as separate tracks.</p>
           </div>
-
-          <div class="grid2">
-            <label class="field">
-              <span>Source</span>
-              <select id="source">
-                <option value="zoom">Zoom</option>
-                <option value="google_meet">Google Meet</option>
-                <option value="telegram">Telegram</option>
-                <option value="discord">Discord</option>
-                <option value="x_spaces">X Spaces</option>
-                <option value="phone">Phone</option>
-                <option value="in_person">In person</option>
-                <option value="other" selected>Other</option>
-              </select>
-            </label>
-            <label class="field">
-              <span>Visibility</span>
-              <select id="visibility">
-                <option value="private" selected>Private</option>
-                <option value="tcf_internal">TCF internal</option>
-                <option value="project">Project</option>
-                <option value="shared_users">Shared users</option>
-              </select>
-            </label>
-          </div>
-
-          <label class="field">
-            <span>Tags <em class="hint-inline">comma, separated (optional)</em></span>
-            <input id="tags" type="text" placeholder="board, q3, customer" />
-          </label>
 
           <label class="field">
             <span id="mic-label">Microphone</span>
@@ -153,7 +98,8 @@
 
           <div id="system-audio-fields">
             <!-- macOS 14.2 and later: call audio is recorded by macOS itself. Nothing to
-                 install or route; macOS asks for permission once. -->
+                 install or route; macOS asks for permission once. Shown only while there is
+                 a step left for the person to take. -->
             <div id="native-audio-fields" class="native-audio hidden">
               <div class="field">
                 <span>Call audio</span>
@@ -168,28 +114,100 @@
             <!-- macOS 12.0 to 14.1, or by choice: the BlackHole 2ch virtual device. -->
             <div id="blackhole-fields" class="blackhole-audio hidden">
               <label class="field">
-                <span>System audio source</span>
+                <span>Call audio source</span>
                 <select id="system-source"></select>
               </label>
-              <p id="blackhole-hint" class="hint">Pick <strong>BlackHole 2ch</strong> (selected automatically when it is
-                installed). Route the meeting into BlackHole through a Multi-Output Device: the README has
-                the steps. The “Call audio” meter confirms it is working.</p>
+              <p id="blackhole-hint" class="hint">Pick <strong>BlackHole 2ch</strong> and route the meeting into it
+                through a Multi-Output Device. The README has the steps.</p>
             </div>
-
-            <!-- Only offered where macOS can record call audio itself. -->
-            <label id="system-audio-pref-row" class="field hidden">
-              <span>Call audio capture</span>
-              <select id="system-audio-pref">
-                <option value="auto" selected>Built into macOS (recommended)</option>
-                <option value="blackhole">BlackHole driver</option>
-              </select>
-            </label>
           </div>
 
-          <div class="preflight">
-            <div class="preflight-head">
-              <span>Device check</span>
-              <button id="preflight-btn" class="btn ghost small" type="button">Re-check</button>
+          <div id="details" class="box">
+            <div class="line">
+              <button id="details-toggle" class="line-btn" type="button" aria-expanded="false" aria-controls="details-body">
+                <span class="k">Details</span>
+                <span id="details-summary" class="v clip"></span>
+                <svg class="chev" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 5.5 7 9l3.5-3.5"/></svg>
+              </button>
+            </div>
+            <div id="details-body" class="box-body">
+              <div class="grid2">
+                <label class="field">
+                  <span>Template</span>
+                  <!-- keys mirror supabase/functions/_shared/forgenotes-templates.ts (source of truth).
+                       The empty option means "no explicit pick": template_key is OMITTED from the
+                       create-session body and the server applies the user's saved default
+                       (forgenotes_user_settings.default_template_key, /notes/settings). -->
+                  <select id="template">
+                    <option value="" selected>Account default</option>
+                    <option value="general">General</option>
+                    <optgroup label="Internal">
+                      <option value="one_on_one">1:1</option>
+                      <option value="standup">Standup</option>
+                      <option value="team_meeting">Team meeting</option>
+                      <option value="retrospective">Retrospective</option>
+                      <option value="planning">Planning</option>
+                      <option value="brainstorm">Brainstorm</option>
+                    </optgroup>
+                    <optgroup label="External">
+                      <option value="sales_call">Sales call</option>
+                      <option value="investor_call">Investor call</option>
+                      <option value="interview">Interview</option>
+                      <option value="client_project">Client / project</option>
+                      <option value="customer_support">Support call</option>
+                    </optgroup>
+                    <optgroup label="Formal">
+                      <option value="board_meeting">Board meeting</option>
+                      <option value="incident_review">Incident review</option>
+                    </optgroup>
+                    <optgroup label="Content &amp; community">
+                      <option value="training">Training</option>
+                      <option value="seminar">Seminar</option>
+                      <option value="community_call">Community call</option>
+                      <option value="content_recording">Content recording</option>
+                    </optgroup>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>Source</span>
+                  <select id="source">
+                    <option value="zoom">Zoom</option>
+                    <option value="google_meet">Google Meet</option>
+                    <option value="telegram">Telegram</option>
+                    <option value="discord">Discord</option>
+                    <option value="x_spaces">X Spaces</option>
+                    <option value="phone">Phone</option>
+                    <option value="in_person">In person</option>
+                    <option value="other" selected>Other</option>
+                  </select>
+                </label>
+              </div>
+              <div class="grid2">
+                <label class="field">
+                  <span>Who can see it</span>
+                  <select id="visibility">
+                    <option value="private" selected>Private</option>
+                    <option value="tcf_internal">TCF internal</option>
+                    <option value="project">Project</option>
+                    <option value="shared_users">Shared users</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>Tags<em class="hint-inline">optional</em></span>
+                  <input id="tags" type="text" placeholder="board, q3" />
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <div id="preflight" class="preflight box">
+            <div class="line">
+              <button id="pf-toggle" class="line-btn" type="button" aria-expanded="false" aria-controls="preflight-results">
+                <span id="pf-sum-ic" class="pf-ic">…</span>
+                <span id="pf-sum-key" class="k">Checking</span>
+                <span id="pf-sum-text" class="v clip"></span>
+              </button>
+              <button id="preflight-btn" class="btn link" type="button">Check again</button>
             </div>
             <ul id="preflight-results" class="pf-list"></ul>
             <div id="pf-meter" class="meter-row pf-meter hidden">
@@ -198,58 +216,19 @@
             </div>
           </div>
 
-          <p id="consent-copy" class="consent">🔴 Recording captures your mic and (if enabled) everyone on the call.
-            Make sure participants consent before you start. ForgeNotes will say “This meeting is being
-            recorded.” when you start — people on a call only hear it if your speakers are on.</p>
+          <p id="consent-copy" class="hint">Get consent first. ForgeNotes announces the recording when you start.</p>
+        </div>
 
-          <div class="announce-setting">
-            <label class="checkbox">
-              <input id="announce-recording" type="checkbox" checked />
-              <span>Announce recording aloud</span>
-            </label>
-            <p class="hint">Says “This meeting is being recorded.” through your speakers when you start.</p>
-            <div id="announce-voice-row" class="announce-voice hidden">
-              <label class="field">
-                <span>Voice</span>
-                <select id="announce-voice"></select>
-              </label>
-              <button id="announce-preview" class="btn ghost" type="button">Preview</button>
-            </div>
+        <!-- While recording. -->
+        <div class="live">
+          <div class="now">
+            <h2 id="now-title" class="clip"></h2>
+            <p id="now-sub" class="hint clip"></p>
           </div>
-
-          <!-- Stop on silence: off unless chosen. The choice is kept with the account (the web
-               recorder's setting), and the last value seen is used at Start. -->
-          <div class="silence-setting">
-            <label class="field">
-              <span>Stop a recording by itself</span>
-              <select id="silence-minutes"></select>
-            </label>
-            <p id="silence-message" class="hint hidden" role="status"></p>
-            <p id="silence-load-failed" class="hint hidden"><span id="silence-load-text"></span>
-              <button id="silence-retry" class="btn link small-link" type="button">Try again</button></p>
-            <p class="hint">A recording left running in an empty room uses your hours. If you turn this on, a
-              recording that has heard nothing for the time you choose asks whether you are still there, and
-              stops a minute later if nobody answers. Everything it recorded is kept, the quiet part included.</p>
-            <p id="silence-more" class="hint hidden"></p>
-          </div>
-
-          <label class="checkbox"><input id="auto-upload" type="checkbox" /><span>Automatically upload after saving (optional)</span></label>
-          <div class="controls">
-            <button id="start-btn" class="btn primary big">Start recording</button>
-            <button id="pause-btn" class="btn ghost hidden">Pause</button>
-            <button id="stop-btn" class="btn danger hidden">Stop &amp; save</button>
-          </div>
-          <div id="silence-question" class="silence-question hidden" role="alert">
-            <p id="silence-question-text"></p>
-            <button id="silence-keep" class="btn primary" type="button">Keep recording</button>
-          </div>
-          <p id="announce-note" class="announce-note hidden" role="status">Couldn't play the recording
-            announcement — recording continues. Let participants know yourself.</p>
-          <p id="capture-note" class="msg hidden" role="status"></p>
 
           <div id="meters" class="meters hidden">
             <div class="meter-row">
-              <span class="cap" id="cap-mic">You (mic)</span>
+              <span class="cap" id="cap-mic">You</span>
               <div class="meter"><div id="meter-mic" class="meter-fill"></div></div>
             </div>
             <div id="meter-system-row" class="meter-row">
@@ -260,32 +239,110 @@
 
           <div id="live-panel" class="live-panel hidden">
             <div class="live-head">
-              <span class="live-title">LIVE CAPTIONS</span>
-              <span class="live-badge">on-device</span>
+              <span class="live-title">Live captions</span>
+              <span class="live-badge">Stays on this Mac</span>
               <span id="live-state" class="live-state"></span>
-              <button id="live-toggle" class="btn ghost small" type="button">Turn off</button>
+              <button id="live-toggle" class="btn link" type="button">Turn off</button>
             </div>
             <div id="live-scroll" class="live-scroll">
               <p id="live-text" class="live-text"></p>
             </div>
-            <button id="live-latest" class="live-latest hidden" type="button">↓ Latest</button>
-            <p class="hint">Preview only — the full transcript is prepared after upload. Speech never leaves this machine.</p>
+            <button id="live-latest" class="live-latest hidden" type="button">Latest</button>
           </div>
+        </div>
+      </section>
+    </main>
 
-          <p id="stop-note" class="msg warn hidden" role="status"></p>
-          <p id="status" class="msg hidden"></p>
-          <a id="open-link" class="btn link hidden" href="#">Open in ForgeNotes →</a>
+    <!-- ── Recordings ─────────────────────────────────────────────────────── -->
+    <main id="view-recordings" class="view">
+      <p id="pending-empty" class="hint">No recordings on this Mac yet.</p>
+      <section id="pending-view" class="hidden">
+        <ul id="pending-list" class="pending-list"></ul>
+        <div id="local-player" class="player hidden"></div>
+      </section>
+      <p id="pending-note" class="hint hidden">Recordings stay on this Mac until you delete them.</p>
+    </main>
+
+    <!-- ── Settings ───────────────────────────────────────────────────────── -->
+    <main id="view-settings" class="view">
+      <section class="group">
+        <h3>Account</h3>
+        <div class="set">
+          <div class="txt"><b id="account-email"></b></div>
+          <button id="signout-btn" class="btn small" type="button">Sign out</button>
         </div>
       </section>
 
-      <!-- Pending uploads / offline queue -->
-      <section id="pending-view" class="card hidden">
-        <h3>Recordings on this device</h3>
-        <p class="muted small">Recordings stay on this device until you delete them. Uploading is optional.</p>
-        <div id="local-player" class="hidden"></div>
-        <ul id="pending-list" class="pending-list"></ul>
+      <section class="group">
+        <h3>Recording</h3>
+        <label class="set">
+          <div class="txt"><b>Announce the recording aloud</b><span>Plays through your speakers when you start.</span></div>
+          <input id="announce-recording" type="checkbox" checked />
+        </label>
+        <div id="announce-voice-row" class="set hidden">
+          <div class="txt"><b>Announcement voice</b></div>
+          <div class="ctl">
+            <select id="announce-voice" aria-label="Announcement voice"></select>
+            <button id="announce-preview" class="btn small" type="button">Preview</button>
+          </div>
+        </div>
+        <!-- Stop on silence: off unless chosen. The choice is kept with the account (the web
+             recorder's setting), and the last value seen is used at Start. -->
+        <div class="set">
+          <div class="txt"><b>Stop when it goes quiet</b><span>Asks first. Nothing is lost.</span></div>
+          <select id="silence-minutes" aria-label="Stop when it goes quiet"></select>
+        </div>
+        <label class="set">
+          <div class="txt"><b>Upload as soon as I stop</b></div>
+          <input id="auto-upload" type="checkbox" />
+        </label>
+        <p id="silence-message" class="hint hidden" role="status"></p>
+        <p id="silence-load-failed" class="hint hidden"><span id="silence-load-text"></span>
+          <button id="silence-retry" class="btn link small-link" type="button">Try again</button></p>
+        <p id="silence-more" class="hint hidden"></p>
+      </section>
+
+      <!-- Only offered where macOS can record call audio itself. -->
+      <section id="group-call-audio" class="group">
+        <h3>Call audio</h3>
+        <label id="system-audio-pref-row" class="set hidden">
+          <div class="txt"><b>How call audio is recorded</b></div>
+          <select id="system-audio-pref">
+            <option value="auto" selected>Built into macOS (recommended)</option>
+            <option value="blackhole">BlackHole driver</option>
+          </select>
+        </label>
+      </section>
+
+      <section class="group">
+        <h3>Privacy</h3>
+        <label class="set">
+          <div class="txt"><b>Share product analytics</b><span>Never audio, meeting text or email.</span></div>
+          <input id="analytics-choice" type="checkbox" />
+        </label>
+        <p id="analytics-status" class="hint" aria-live="polite"></p>
       </section>
     </main>
+
+    <!-- Messages about the recording in hand, shown above the buttons on either tab. -->
+    <div class="notices">
+      <div id="silence-question" class="silence-question hidden" role="alert">
+        <p id="silence-question-text"></p>
+        <button id="silence-keep" class="btn primary small" type="button">Keep recording</button>
+      </div>
+      <p id="announce-note" class="announce-note hidden" role="status">The recording announcement could not
+        be played. Recording continues: let people know yourself.</p>
+      <p id="capture-note" class="msg hidden" role="status"></p>
+      <p id="stop-note" class="msg warn hidden" role="status"></p>
+      <p id="status" class="msg hidden"></p>
+      <a id="open-link" class="btn link hidden" href="#">Open in ForgeNotes</a>
+    </div>
+
+    <footer class="foot">
+      <button id="start-btn" class="btn primary big">Start recording</button>
+      <button id="pause-btn" class="btn ghost hidden">Pause</button>
+      <button id="stop-btn" class="btn danger hidden">Stop and save</button>
+    </footer>
 
     <script src="capture-clock.js"></script>
     <script src="silence.js"></script>
@@ -294,6 +351,7 @@
     <script src="product-analytics.js"></script>
     <script src="system-audio.js"></script>
     <script src="app.js"></script>
+    <script src="layout.js"></script>
       <script type="module" src="transcriber.js"></script>
   </body>
 </html>

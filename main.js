@@ -94,12 +94,54 @@ async function loadConfig() {
   }
 }
 
+// The window opens at the size the person last left it and, the first time, at 480 x 700:
+// the Record view fits that without scrolling (scripts/test-layout.cjs). Sizes are the
+// page's own area (useContentSize), so the title bar and frame of each system do not eat
+// into it, and nothing in the page wraps down to the minimum.
+const WINDOW_DEFAULT = { width: 480, height: 700 }
+const WINDOW_MIN = { width: 440, height: 620 }
+const windowStateFile = () => path.join(app.getPath('userData'), 'window-state.json')
+
+function readWindowSize() {
+  try {
+    const saved = JSON.parse(require('node:fs').readFileSync(windowStateFile(), 'utf8'))
+    const width = Math.round(Number(saved.width))
+    const height = Math.round(Number(saved.height))
+    if (width >= WINDOW_MIN.width && height >= WINDOW_MIN.height && width <= 4000 && height <= 4000) return { width, height }
+  } catch {
+    // first run, or an unreadable file: the default size
+  }
+  return { ...WINDOW_DEFAULT }
+}
+
+function rememberWindowSize(window, opening) {
+  // Hiding the menu bar after the window is made changes the page's area on Windows, so the
+  // size is set again here, where the frame is final.
+  window.setContentSize(opening.width, opening.height)
+  // The minimum is given for the page too: add what the frame takes on this system.
+  const [outerWidth, outerHeight] = window.getSize()
+  const [innerWidth, innerHeight] = window.getContentSize()
+  window.setMinimumSize(WINDOW_MIN.width + outerWidth - innerWidth, WINDOW_MIN.height + outerHeight - innerHeight)
+  let timer = null
+  window.on('resize', () => {
+    clearTimeout(timer)
+    timer = setTimeout(() => {
+      if (window.isDestroyed() || window.isMinimized() || window.isMaximized() || window.isFullScreen()) return
+      const [width, height] = window.getContentSize()
+      try {
+        require('node:fs').writeFileSync(windowStateFile(), JSON.stringify({ width, height }))
+      } catch {
+        // not worth interrupting anyone: the default size is used next time
+      }
+    }, 400)
+  })
+}
+
 function createWindow() {
+  const opening = readWindowSize()
   mainWindow = new BrowserWindow({
-    width: 460,
-    height: 820,
-    minWidth: 420,
-    minHeight: 680,
+    ...opening,
+    useContentSize: true,
     title: 'ForgeNotes Recorder',
     backgroundColor: '#09090b',
     icon: path.join(__dirname, 'icon.png'),
@@ -119,6 +161,7 @@ function createWindow() {
   })
 
   mainWindow.setMenuBarVisibility(false)
+  rememberWindowSize(mainWindow, opening)
   const window = mainWindow
   window.webContents.on('will-prevent-unload', () => { void askToStopForQuit(window) })
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'))
@@ -419,7 +462,7 @@ ipcMain.handle('rec:list', async () => {
       const meta = JSON.parse(await fs.readFile(path.join(REC_DIR(), ent.name, 'meta.json'), 'utf8'))
       out.push({ localId: ent.name, meta })
     } catch {
-      out.push({ localId: ent.name, meta: { title: 'Interrupted recording — inspect saved files', state: 'damaged' } })
+      out.push({ localId: ent.name, meta: { title: 'Unreadable recording', state: 'damaged' } })
     }
   }
   out.sort((a, b) => String(b.meta?.createdAt || '').localeCompare(String(a.meta?.createdAt || '')))

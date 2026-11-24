@@ -6,7 +6,7 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "verify": "node --check renderer/product-analytics.js && node --check renderer/capture-clock.js && node --check renderer/silence.js && node --check renderer/input-devices.js && node --check renderer/sign-in-errors.js && node --check renderer/system-audio.js && node --check renderer/level-worklet.js && node --check renderer/app.js && node --check main.js && node --check device-id.js && node scripts/verify-capture-profile.mjs",
+    "verify": "node --check renderer/product-analytics.js && node --check renderer/capture-clock.js && node --check renderer/silence.js && node --check renderer/input-devices.js && node --check renderer/sign-in-errors.js && node --check renderer/system-audio.js && node --check renderer/level-worklet.js && node --check renderer/app.js && node --check renderer/layout.js && node --check main.js && node --check device-id.js && node scripts/verify-capture-profile.mjs",
     "prepare:config": "node scripts/write-production-config.mjs",
     "dist:mac": "npm run prepare:config && electron-builder --mac --universal --publish never && npm run verify:mac",
     "dist:mac:unsigned": "npm run prepare:config && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --universal --publish never -c.mac.identity=null -c.mac.hardenedRuntime=false -c.mac.notarize=false",
@@ -16,6 +16,7 @@
     "audit:gate": "node scripts/audit-gate.mjs",
     "test:media-runtime": "electron scripts/test-media-runtime.cjs && electron scripts/test-call-audio-runtime.cjs",
     "test:capture-runtime": "electron scripts/test-capture-runtime.cjs",
+    "test:layout": "electron scripts/test-layout.cjs",
     "test:recorder-ui": "electron scripts/test-recorder-ui.cjs && electron scripts/test-recorder-ui.cjs --old-macos",
     "analyze:recording": "electron scripts/analyze-recording.cjs"
   },

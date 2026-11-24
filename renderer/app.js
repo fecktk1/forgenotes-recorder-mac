@@ -83,7 +83,7 @@ async function boot() {
     if (CFG._parseError) {
       const detail = document.querySelector('#config-error p')
       if (detail) {
-        detail.textContent = `${CFG._parseError}. Open config.json and make sure every value — especially the publishable key — is wrapped in double quotes, then restart.`
+        detail.textContent = `${CFG._parseError}. Open config.json and make sure every value, especially the publishable key, is wrapped in double quotes, then restart.`
       }
     }
     show('config-error')
@@ -365,12 +365,13 @@ function setCaptureProfile(profile, { syncSource = true, check = true } = {}) {
   $('system-audio-fields').classList.toggle('hidden', room)
   $('meter-system-row').classList.toggle('hidden', room)
   $('mic-label').textContent = room ? 'Room microphone' : 'Microphone'
-  $('cap-mic').textContent = room ? 'Room mic' : 'You (mic)'
+  $('cap-mic').textContent = room ? 'Room mic' : 'You'
+  // One line each at the narrowest window: scripts/test-layout.cjs measures them.
   $('mode-hint').textContent = room
-    ? 'Uses one microphone for everyone in the room and separates speakers during transcription.'
+    ? 'One microphone for the room. Speakers are told apart in the transcript.'
     : systemAudioChoice().path === 'native'
-      ? 'Captures your microphone and the call audio as separate tracks.'
-      : 'Captures your microphone and the call audio (through BlackHole) as separate tracks.'
+      ? 'Records your microphone and the call audio as separate tracks.'
+      : 'Records your microphone and, through BlackHole, the call audio.'
   renderConsentCopy()
   if (syncSource) {
     if (room) $('source').value = 'in_person'
@@ -384,13 +385,14 @@ function setCaptureProfile(profile, { syncSource = true, check = true } = {}) {
 // "Announce recording aloud" setting is on.
 function renderConsentCopy() {
   const room = captureProfile() === 'room_single_mic'
-  const base = room
-    ? '🔴 Recording captures everyone in the room. Place the microphone near the center and make sure all participants consent.'
-    : '🔴 Recording captures your mic and (if enabled) everyone on the call. Make sure participants consent before you start.'
-  const spoken = room
-    ? ` ForgeNotes will say “${ANNOUNCE_TEXT}” when you start — people in the room only hear it if your speakers are on.`
-    : ` ForgeNotes will say “${ANNOUNCE_TEXT}” when you start — people on a call only hear it if your speakers are on.`
-  $('consent-copy').textContent = announceEnabled() ? base + spoken : base
+  const el = $('consent-copy')
+  el.textContent = announceEnabled()
+    ? 'Get consent first. ForgeNotes announces the recording when you start.'
+    : room ? 'Get consent from everyone in the room before you start.' : 'Get consent from everyone on the call before you start.'
+  // The longer version, for anyone who rests the pointer on the line.
+  el.title = announceEnabled()
+    ? `ForgeNotes says “${ANNOUNCE_TEXT}” through your speakers when you start. People ${room ? 'in the room' : 'on a call'} only hear it if your speakers are on.`
+    : 'The spoken announcement is off (Settings), so nobody is told unless you tell them.'
 }
 
 // ---------------------------------------------------------------- call audio: which path
@@ -667,7 +669,7 @@ async function runPreflight() {
     const micTrack = stream.getAudioTracks()[0]
     const bluetooth = SA.looksLikeBluetoothMic({ label: micTrack && micTrack.label, sampleRate: micTrack && micTrack.getSettings().sampleRate })
     if (bluetooth) setPreflightRow('mic', 'warn', 'Microphone', `Working. ${SA.BLUETOOTH_MIC_NOTE}`)
-    else setPreflightRow('mic', 'ok', 'Microphone', 'Ready — speak and watch the level move.')
+    else setPreflightRow('mic', 'ok', 'Microphone', 'Speak and watch the level move.')
   } catch (e) {
     setPreflightRow('mic', 'fail', 'Microphone', `Not available (${e.name || e.message}). Allow microphone access in System Settings → Privacy & Security → Microphone, then re-check.`)
   }
@@ -688,8 +690,8 @@ async function runPreflight() {
       if (selected && FnInputDevices.sameInput($('mic').value, selected, inputs)) {
         setPreflightRow('system', 'fail', 'Call audio source',
           `The microphone is “${FnInputDevices.inputName(selected, inputs)}” too: the call would be recorded twice and your own voice not at all. Pick the microphone you speak into above.`)
-      } else if (selected) setPreflightRow('system', 'ok', 'Call audio source', `Capturing “${selectedLabel}” — route the meeting into it via a Multi-Output Device.`)
-      else if (hasBlackhole) setPreflightRow('system', 'warn', 'Call audio source', 'BlackHole is available but not selected — pick it above to capture call audio.')
+      } else if (selected) setPreflightRow('system', 'ok', 'Call audio source', `Capturing “${selectedLabel}”. Route the meeting into it via a Multi-Output Device.`)
+      else if (hasBlackhole) setPreflightRow('system', 'warn', 'Call audio source', 'BlackHole is available but not selected. Pick it above to capture call audio.')
       else if (systemAudioChoice().nativeSupported) setPreflightRow('system', 'warn', 'Call audio source', 'BlackHole 2ch is not installed. Set “Call audio capture” to “Built into macOS” to record calls without it.')
       else setPreflightRow('system', 'warn', 'Call audio source', `No system-audio source. On this version of macOS, call audio needs BlackHole 2ch (the README has the steps); macOS ${systemAudioInfo.nativeMinVersion} and later do not need it.`)
     } catch {
@@ -703,9 +705,9 @@ async function runPreflight() {
     if (info && typeof info.freeBytes === 'number') {
       const gb = info.freeBytes / (1024 ** 3)
       const label = `${gb.toFixed(1)} GB free`
-      if (gb >= 2) setPreflightRow('disk', 'ok', 'Disk space', `${label} — plenty for a long meeting.`)
-      else if (gb >= 0.5) setPreflightRow('disk', 'warn', 'Disk space', `${label} — OK for a short meeting; free up space for long calls.`)
-      else setPreflightRow('disk', 'fail', 'Disk space', `${label} — too low; free up space before recording.`)
+      if (gb >= 2) setPreflightRow('disk', 'ok', 'Disk space', `${label}: plenty for a long meeting.`)
+      else if (gb >= 0.5) setPreflightRow('disk', 'warn', 'Disk space', `${label}: enough for a short meeting. Free up space for long calls.`)
+      else setPreflightRow('disk', 'fail', 'Disk space', `${label}: too low. Free up space before recording.`)
     } else {
       setPreflightRow('disk', 'skip', 'Disk space', 'Could not read free space (recording still works).')
     }
@@ -1320,11 +1322,11 @@ async function beginRecording() {
       }
     } catch (e) {
       systemStream = null
-      warning = `Could not open the system-audio device (${e.name}: ${e.message}) — recording mic only. Is BlackHole installed and selected?`
+      warning = `Could not open the system-audio device (${e.name}: ${e.message}). Recording the microphone only. Is BlackHole installed and selected?`
       console.error('[forgenotes] system getUserMedia failed:', e)
     }
   } else if (systemPath === 'blackhole') {
-    warning = 'No system-audio source selected — recording mic only. Pick BlackHole 2ch to capture the meeting.'
+    warning = 'No system-audio source selected. Recording the microphone only. Pick BlackHole 2ch to capture the meeting.'
   }
 
   const mime = pickMime()
@@ -1414,7 +1416,7 @@ async function beginRecording() {
   // Stop is reset on every Start, whatever an earlier recording or upload did to it: a
   // Stop that cannot be pressed leaves a recording that cannot be ended or quit.
   $('stop-btn').disabled = false
-  $('stop-btn').textContent = 'Stop & save'
+  $('stop-btn').textContent = 'Stop and save'
   $('stop-btn').classList.remove('hidden')
   $('signout-btn').disabled = true
   $('system-audio-pref').disabled = true // the path of a running recording cannot change
@@ -1600,7 +1602,7 @@ function renderCaptureHealth(current) {
   } else {
     const health = current.health.system
     const lost = health === 'absent' || health === 'ended' || health === 'no_frames'
-    sysEl.textContent = lost ? 'Call audio: NOT captured — mic only' : health === 'silent' ? 'Call audio: nothing heard yet' : 'Call audio: capturing'
+    sysEl.textContent = lost ? 'Call audio: NOT captured, mic only' : health === 'silent' ? 'Call audio: nothing heard yet' : 'Call audio: capturing'
     sysEl.className = lost || health === 'silent' ? 'cap bad' : 'cap ok'
     systemMessage = current.reacquiring.system
       ? { level: 'warn', text: 'Call audio stopped. ForgeNotes is reconnecting it; your microphone is still being recorded.' }
@@ -1869,7 +1871,7 @@ async function stopRecording(reason = 'manual') {
     setStatus(`Could not finish saving. Completed checkpoints remain on disk: ${e.message}`, 'error')
     return
   }
-  setStatus('Saved on this device. Play it below, open its folder, or choose Upload & transcribe.', 'ok')
+  setStatus('Saved on this device. Play or upload it from Recordings.', 'ok')
   // Said once more at the end, where it stays on screen: a recording with no call audio.
   if (noCallAudio) {
     setCaptureNote({ level: 'warn', text: SA.noCallAudioSummary(systemPathUsed) })
@@ -1961,12 +1963,12 @@ async function uploadSegmentWithRetry(sessionId, s, sha) {
       await diag(`upload ${s.track}-${s.seq}${useB64 ? ' (b64)' : ''} attempt ${attempt}/${CHUNK_ATTEMPTS} failed: ${e.message}${status ? ` (HTTP ${status})` : ' (network)'}`)
       if (status === 403 && !useB64) {
         useB64 = true
-        setStatus(`${s.track}-${s.seq} blocked in transit — retrying with safe encoding…`, 'warn')
+        setStatus(`${s.track}-${s.seq} blocked in transit. Retrying with safe encoding…`, 'warn')
         continue
       }
       const retryable = !status || status >= 500
       if (!retryable || attempt === CHUNK_ATTEMPTS) throw e
-      setStatus(`${s.track}-${s.seq} failed (${e.message}) — retrying…`, 'warn')
+      setStatus(`${s.track}-${s.seq} failed (${e.message}). Retrying…`, 'warn')
       await new Promise((resolve) => setTimeout(resolve, CHUNK_RETRY_DELAYS_MS[attempt - 1]))
     }
   }
@@ -2000,7 +2002,7 @@ function parseTags(raw) {
 
 async function uploadSegments(localId, meta, seqd) {
   if (activeUploads.has(localId)) {
-    setStatus('This recording is already uploading — hang tight.', 'warn')
+    setStatus('This recording is already uploading.', 'warn')
     return
   }
   activeUploads.add(localId)
@@ -2046,7 +2048,7 @@ async function uploadSegments(localId, meta, seqd) {
       void analytics?.capture('upload_completed')
       await refreshPending()
       await diag(`upload skipped for ${localId}: session ${sessionId} already ${sessionStatus}`)
-      showUploaded(sessionId, 'Already uploaded — ForgeNotes has this meeting.')
+      showUploaded(sessionId, 'Already uploaded: ForgeNotes has this meeting.')
       return
     }
 
@@ -2086,11 +2088,11 @@ async function uploadSegments(localId, meta, seqd) {
     if (e && e.httpStatus === 402) {
       // Quota, not breakage. The audio is safe locally and uploads cleanly next period.
       setStatus("You've used this month's recording hours. This recording is saved on this " +
-        'device — retry after your quota resets, or upgrade in the iPhone app.', 'warn')
+        'device. Retry after your quota resets, or upgrade in the iPhone app.', 'warn')
       await refreshPending()
       return
     }
-    setStatus(`Upload failed — saved on this device, retry below. (${e.message})`, 'error')
+    setStatus(`Upload failed. It is saved on this device: retry from Recordings. (${e.message})`, 'error')
     await diag(`upload run failed for ${localId}: ${e.message}${e.httpStatus ? ` (HTTP ${e.httpStatus})` : ''}`)
   } finally {
     activeUploads.delete(localId)
@@ -2099,23 +2101,45 @@ async function uploadSegments(localId, meta, seqd) {
 }
 
 let stopLocalPlayback = () => {}
+let playingLocalId = null // the saved recording in the player, if any
+
+function clockText(seconds) {
+  const whole = Math.max(0, Math.floor(seconds))
+  return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}`
+}
+
+// The player sits inside the row it plays. The list is rebuilt whenever a recording
+// changes, so the one player element is parked in the list's section and put back.
+function placeLocalPlayer() {
+  const panel = $('local-player')
+  const row = playingLocalId && [...$('pending-list').children].find((li) => li.dataset.localId === playingLocalId)
+  if (row) row.insertBefore(panel, row.querySelector('.actions'))
+  else $('pending-view').appendChild(panel)
+  for (const li of $('pending-list').children) {
+    const play = li.querySelector('[data-play]')
+    if (play) play.textContent = li.dataset.localId === playingLocalId ? 'Close player' : 'Play'
+  }
+}
+
 async function playLocalRecording(localId) {
   stopLocalPlayback()
-  const { meta, files } = await window.desktop.playback(localId)
+  const { files } = await window.desktop.playback(localId)
   if (!files.length) throw new Error('No playable audio is saved.')
   const panel = $('local-player'); panel.replaceChildren(); panel.classList.remove('hidden')
-  const label = document.createElement('p'); label.textContent = meta.title || 'Local recording'
-  const toggle = document.createElement('button'); toggle.className = 'btn primary'; toggle.textContent = 'Pause'
-  const close = document.createElement('button'); close.className = 'btn ghost'; close.textContent = 'Close player'
-  const select = document.createElement('select')
+  playingLocalId = localId
+  const toggle = document.createElement('button'); toggle.className = 'btn small'; toggle.type = 'button'; toggle.textContent = 'Pause'
+  const select = document.createElement('select'); select.setAttribute('aria-label', 'Who to hear')
   const trackNames = [...new Set(files.map((f) => f.track))]
   for (const name of ['everyone', ...trackNames]) {
-    const option = document.createElement('option'); option.value = name; option.textContent = name === 'everyone' ? 'Everyone' : name; select.appendChild(option)
+    const option = document.createElement('option'); option.value = name; option.textContent = name === 'everyone' ? 'Everyone' : trackLabel(name); select.appendChild(option)
   }
   const seek = document.createElement('input'); seek.type = 'range'; seek.min = '0'; seek.step = '0.1'
-  seek.max = String(Math.max(...files.map((f) => (f.startOffsetMs + f.durationMs) / 1000)))
+  const total = Math.max(...files.map((f) => (f.startOffsetMs + f.durationMs) / 1000))
+  seek.max = String(total); seek.value = '0'
   seek.setAttribute('aria-label', 'Local playback position')
-  const clock = document.createElement('span')
+  const clock = document.createElement('span'); clock.className = 'time'
+  const showClock = (seconds) => { clock.textContent = `${clockText(seconds)} / ${clockText(total)}` }
+  showClock(0)
   let players = []; let position = 0; let playing = true
   function pause() { players.forEach((p) => p.pause()) }
   function dispose() { players.forEach(p => { p.onended = null; p.ontimeupdate = null; p.onerror = null; p.onloadedmetadata = null; p.removeAttribute('src'); p.load() }) }
@@ -2131,9 +2155,9 @@ async function playLocalRecording(localId) {
     for (const file of chosen) {
       const audio = new Audio(file.url); players.push(audio)
       audio.onloadedmetadata = () => { audio.currentTime = Math.max(0, seconds - file.startOffsetMs / 1000); if (playing) audio.play().catch(() => { playing = false; toggle.textContent = 'Play' }) }
-      audio.onerror = () => { pause(); setStatus('A saved segment could not be played. Open folder to inspect it.', 'error') }
+      audio.onerror = () => { pause(); setStatus('A saved segment could not be played. Open its folder to inspect it.', 'error') }
       if (file === masterFile) {
-        audio.ontimeupdate = () => { position = file.startOffsetMs / 1000 + audio.currentTime; seek.value = String(position); clock.textContent = `${Math.floor(position / 60)}:${String(Math.floor(position % 60)).padStart(2, '0')}` }
+        audio.ontimeupdate = () => { position = file.startOffsetMs / 1000 + audio.currentTime; seek.value = String(position); showClock(position) }
         audio.onended = () => { const nextFile = files.filter(f => selected.includes(f.track) && f.startOffsetMs > file.startOffsetMs).sort((a,b) => a.startOffsetMs-b.startOffsetMs)[0]; if (nextFile) playAt(nextFile.startOffsetMs / 1000); else { playing = false; toggle.textContent = 'Play'; pause() } }
       }
     }
@@ -2141,16 +2165,91 @@ async function playLocalRecording(localId) {
   toggle.onclick = () => { playing = !playing; toggle.textContent = playing ? 'Pause' : 'Play'; if (playing) playAt(position >= Number(seek.max) ? 0 : position); else pause() }
   seek.oninput = () => playAt(Number(seek.value))
   select.onchange = () => playAt(position)
-  stopLocalPlayback = () => { pause(); dispose(); panel.replaceChildren(); panel.classList.add('hidden') }
-  close.onclick = stopLocalPlayback
-  panel.append(label, toggle, select, seek, clock, close)
+  stopLocalPlayback = () => {
+    pause(); dispose(); panel.replaceChildren(); panel.classList.add('hidden')
+    playingLocalId = null
+    stopLocalPlayback = () => {}
+    placeLocalPlayer()
+  }
+  panel.append(toggle, seek, clock, select)
+  placeLocalPlayer()
   playAt(0)
 }
 
 // ---------------------------------------------------------------- offline queue
+// What a row says about a recording: short facts, each on one line however narrow the window.
+function trackLabel(track) {
+  return { mic: 'You', system: 'Call audio' }[track] || track
+}
+
+function formatLength(seconds) {
+  const total = Math.max(0, Math.round(Number(seconds) || 0))
+  if (total < 60) return `${total} sec`
+  const minutes = Math.round(total / 60)
+  if (minutes < 60) return `${minutes} min`
+  return minutes % 60 ? `${Math.floor(minutes / 60)} hr ${minutes % 60} min` : `${Math.floor(minutes / 60)} hr`
+}
+
+function formatDay(iso) {
+  if (!iso) return 'Unknown time'
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return 'Unknown time'
+  const time = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+  const midnight = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime()
+  const days = Math.round((midnight(new Date()) - midnight(d)) / 86400000)
+  if (days === 0) return `Today, ${time}`
+  if (days === 1) return `Yesterday, ${time}`
+  return `${d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}, ${time}`
+}
+
+function pendingStatus(state) {
+  if (state === 'uploaded') return { text: 'Uploaded', kind: 'ok' }
+  if (state === 'recording') return { text: 'Interrupted, recovered', kind: 'warn' }
+  if (state === 'damaged') return { text: 'Damaged', kind: 'bad' }
+  return { text: 'On this Mac', kind: '' }
+}
+
+let closePendingMenu = () => {}
+// Open folder and Delete live behind the row's "more" button.
+function openPendingMenu(li, anchor, item, busy) {
+  closePendingMenu()
+  const menu = document.createElement('div')
+  menu.className = 'menu'
+  menu.setAttribute('role', 'menu')
+  const add = (label, className, disabled, action) => {
+    const b = document.createElement('button')
+    b.type = 'button'; b.textContent = label; b.className = className; b.disabled = disabled
+    b.setAttribute('role', 'menuitem')
+    b.onclick = () => { closePendingMenu(); action() }
+    menu.appendChild(b)
+  }
+  add('Open folder', '', false, () => window.desktop.openRecordingFolder(item.localId).catch((e) => setStatus(e.message, 'error')))
+  add('Delete', 'del', busy, () => discardPending(item.localId))
+  const actions = anchor.parentElement
+  menu.style.top = `${actions.offsetTop + actions.offsetHeight + 4}px`
+  li.appendChild(menu)
+  anchor.setAttribute('aria-expanded', 'true')
+  const outside = (e) => { if (!menu.contains(e.target) && !anchor.contains(e.target)) closePendingMenu() }
+  const key = (e) => { if (e.key === 'Escape') closePendingMenu() }
+  document.addEventListener('mousedown', outside)
+  document.addEventListener('keydown', key)
+  closePendingMenu = () => {
+    document.removeEventListener('mousedown', outside)
+    document.removeEventListener('keydown', key)
+    menu.remove()
+    anchor.setAttribute('aria-expanded', 'false')
+    closePendingMenu = () => {}
+  }
+}
+
 async function refreshPending() {
   const list = $('pending-list')
   const items = await window.desktop.listPending()
+  closePendingMenu()
+  $('pending-view').appendChild($('local-player')) // parked while the rows are rebuilt
+  $('pending-count').textContent = items.length ? String(items.length) : ''
+  $('pending-empty').classList.toggle('hidden', items.length > 0)
+  $('pending-note').classList.toggle('hidden', !items.length)
   if (!items.length) {
     hide('pending-view')
     list.innerHTML = ''
@@ -2161,55 +2260,74 @@ async function refreshPending() {
   for (const item of items) {
     const li = document.createElement('li')
     li.className = 'pending-item'
+    li.dataset.localId = item.localId
+    const recordingNow = Boolean(rec && `rec_${rec.startedAt}` === item.localId)
+    const uploading = activeUploads.has(item.localId)
 
     const meta = document.createElement('div')
     meta.className = 'meta'
     const title = document.createElement('span')
-    title.className = 't'
+    title.className = 't clip'
     title.textContent = item.meta.title || 'Untitled meeting'
+    title.title = title.textContent
+    const facts = document.createElement('div')
+    facts.className = 'facts'
     const sub = document.createElement('span')
-    sub.className = 's'
-    const when = formatWhen(item.meta.createdAt)
-    const tracks = (item.meta.tracks || []).join(' + ')
-    const setup = item.meta.capture_profile === 'room_single_mic' ? 'in person' : 'online call'
-    sub.textContent = `${when} · ${setup} · ${tracks} · ${item.meta.durationSec || 0}s${item.meta.state === 'recording' ? ' · recovered checkpoints (recording interrupted)' : ''}`
-    meta.appendChild(title)
-    meta.appendChild(sub)
+    sub.className = 's clip'
+    const setup = item.meta.capture_profile === 'room_single_mic' ? 'In person' : 'Online call'
+    sub.textContent = item.meta.state === 'damaged'
+      ? 'Open its folder to inspect the saved files'
+      : `${formatDay(item.meta.createdAt)} · ${formatLength(item.meta.durationSec)} · ${setup}`
+    const status = document.createElement('span')
+    const st = recordingNow ? { text: 'Recording now', kind: 'warn' } : pendingStatus(item.meta.state)
+    status.className = `st ${st.kind}`
+    status.textContent = st.text
+    facts.append(sub, status)
+    meta.append(title, facts)
 
     const actions = document.createElement('div')
     actions.className = 'actions'
-    const retry = document.createElement('button')
-    retry.className = 'btn primary'
-    // While this recording's upload run is in flight, Retry must not start a second
+    // While this recording's upload run is in flight, the button must not start a second
     // parallel run (that's how duplicate meetings were created).
-    if (activeUploads.has(item.localId)) {
-      retry.textContent = 'Uploading…'
-      retry.disabled = true
-    } else {
-      retry.textContent = item.meta.state === 'uploaded' ? 'Uploaded' : 'Upload & transcribe'
-      retry.disabled = ['uploaded', 'damaged'].includes(item.meta.state) || Boolean(rec && `rec_${rec.startedAt}` === item.localId)
+    if (item.meta.state !== 'uploaded' && item.meta.state !== 'damaged') {
+      const retry = document.createElement('button')
+      retry.type = 'button'
+      retry.className = 'btn primary small'
+      retry.textContent = uploading ? 'Uploading…' : 'Upload and transcribe'
+      retry.disabled = uploading || recordingNow
+      retry.onclick = () => retryPending(item.localId, retry)
+      actions.appendChild(retry)
     }
-    retry.onclick = () => retryPending(item.localId, retry)
-    const discard = document.createElement('button')
-    discard.className = 'btn ghost'
-    discard.textContent = 'Discard'
-    discard.onclick = () => discardPending(item.localId)
     const play = document.createElement('button')
-    play.className = 'btn ghost'; play.textContent = 'Play recording'; play.disabled = item.meta.state === 'damaged'
-    play.onclick = () => playLocalRecording(item.localId).catch((e) => setStatus(e.message, 'error'))
-    const folder = document.createElement('button')
-    folder.className = 'btn ghost'; folder.textContent = 'Open folder'
-    folder.onclick = () => window.desktop.openRecordingFolder(item.localId).catch((e) => setStatus(e.message, 'error'))
-    discard.disabled = activeUploads.has(item.localId) || Boolean(rec && `rec_${rec.startedAt}` === item.localId)
-    actions.appendChild(play)
-    actions.appendChild(folder)
-    actions.appendChild(retry)
-    actions.appendChild(discard)
+    play.type = 'button'
+    play.className = 'btn small'; play.textContent = 'Play'; play.dataset.play = '1'
+    play.disabled = item.meta.state === 'damaged'
+    play.onclick = () => {
+      if (playingLocalId === item.localId) stopLocalPlayback()
+      else playLocalRecording(item.localId).catch((e) => setStatus(e.message, 'error'))
+    }
+    const spacer = document.createElement('span')
+    spacer.className = 'sp'
+    const more = document.createElement('button')
+    more.type = 'button'
+    more.className = 'icon-btn'
+    more.setAttribute('aria-label', 'More: open folder, delete')
+    more.setAttribute('aria-haspopup', 'menu')
+    more.setAttribute('aria-expanded', 'false')
+    more.title = 'More'
+    more.innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>'
+    more.onclick = () => {
+      if (more.getAttribute('aria-expanded') === 'true') closePendingMenu()
+      else openPendingMenu(li, more, item, uploading || recordingNow)
+    }
+    actions.append(play, spacer, more)
 
-    li.appendChild(meta)
-    li.appendChild(actions)
+    li.append(meta, actions)
     list.appendChild(li)
   }
+  // A recording that is no longer listed cannot stay in the player.
+  if (playingLocalId && !items.some((item) => item.localId === playingLocalId)) stopLocalPlayback()
+  else placeLocalPlayer()
 }
 
 async function retryPending(localId, btn) {
@@ -2218,7 +2336,7 @@ async function retryPending(localId, btn) {
     return
   }
   if (activeUploads.has(localId)) {
-    setStatus('This recording is already uploading — hang tight.', 'warn')
+    setStatus('This recording is already uploading.', 'warn')
     return
   }
   if (btn) {
@@ -2256,13 +2374,6 @@ function setStatus(text, kind) {
   el.textContent = text
   el.className = `msg ${kind || 'busy'}`
   el.classList.remove('hidden')
-}
-
-function formatWhen(iso) {
-  if (!iso) return 'Unknown time'
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return 'Unknown time'
-  return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
 }
 
 // ---------------------------------------------------------------- events
