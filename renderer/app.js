@@ -2233,9 +2233,14 @@ async function playLocalRecording(localId) {
   function playAt(seconds) {
     pause(); dispose(); players = []; position = seconds
     const selected = select.value === 'everyone' ? trackNames : [select.value]
+    // The segment that covers this moment on each track. A recording does not always have
+    // one: the first segment can start a few milliseconds in (Play at 0:00 then found
+    // nothing and did nothing), and a pause or a sleep leaves a gap. Then play goes on
+    // from the next segment.
     const chosen = selected.map((track) => {
-      const trackFiles = files.filter((f) => f.track === track).sort((a, b) => a.seq - b.seq)
+      const trackFiles = files.filter((f) => f.track === track).sort((a, b) => a.startOffsetMs - b.startOffsetMs)
       return [...trackFiles].reverse().find((f) => f.startOffsetMs / 1000 <= seconds && (f.startOffsetMs + f.durationMs) / 1000 > seconds)
+        || trackFiles.find((f) => f.startOffsetMs / 1000 > seconds)
     }).filter(Boolean)
     if (!chosen.length) { showPlaying(false); return }
     const masterFile = chosen.reduce((a, b) => a.durationMs >= b.durationMs ? a : b)
